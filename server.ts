@@ -2,54 +2,108 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 
+async function fetchFromOpenRouter(systemInstruction: string, userContent: string) {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY environment variable is required");
+  }
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "moonshotai/kimi-k2.5", // We can use an OpenRouter model that supports json natively
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: userContent }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.1
+    })
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`OpenRouter API Error: ${response.status} ${errText}`);
+  }
+
+  const data = await response.json();
+  const textContent = data.choices?.[0]?.message?.content || "{}";
+  return JSON.parse(textContent);
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
   app.use(express.json());
 
-  // API Route for OpenRouter
-  app.post("/api/refine", async (req, res) => {
+  // API Route for Processing Worries (Filtering + LLM Routing)
+  app.post("/api/process-worry", async (req, res) => {
     try {
-      const { content, type } = req.body;
-      const apiKey = process.env.OPENROUTER_API_KEY;
+      const { content, candidates, senderInfo } = req.body;
 
-      if (!apiKey) {
-        return res.status(500).json({ error: "OPENROUTER_API_KEY environment variable is required" });
-      }
+      const systemInstruction = `You are an AI moderator and routing engine for a Korean anonymous worry-sharing app.
+1. First, check if the content is inappropriate (contains extreme profanity, explicit hate speech, or self-harm/violence).
+2. If inappropriate, YOU MUST RETURN JSON exactly like this: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
+3. If appropriate, select EXACTLY 3 best-matching users from the 'Candidate List' to answer this worry.
+   - Match based on the context of the worry + 'Sender Info' vs the candidate's 'gender', 'interests', and their 'pastWorries' & 'pastReplies'.
+   - EVEN IF candidates are not a perfect match, YOU MUST select EXACTLY 3 uids. Fallback matching is required to guarantee 3 are chosen.
+   - If there are fewer than 3 total candidates provided, duplicate the uids so you return exactly 3, or just return all available.
+4. YOU MUST RETURN JSON exactly like this: { "status": "approved", "assignedUids": ["uid1", "uid2", "uid3"] }
 
-      const systemInstruction = type === 'worry' 
-        ? "당신은 심야 라디오 DJ입니다. 사용자가 작성한 사연의 내용을 절대 추가하거나 삭제하지 마세요. 오직 어조만 부드럽고 감성적인 라디오 사연 톤으로 '아주 미세하게만' 변경해주세요. 원본의 문장 구조와 단어를 최대한 100% 그대로 유지해야 합니다. 인사말이나 맺음말을 임의로 덧붙이지 마세요."
-        : "당신은 따뜻한 라디오 청취자입니다. 사용자가 작성한 응답의 내용을 절대 추가하거나 삭제하지 마세요. 오직 어조만 부드럽고 따뜻한 톤으로 '아주 미세하게만' 변경해주세요. 원본의 문장 구조와 단어를 최대한 100% 그대로 유지해야 합니다. 인사말이나 맺음말을 임의로 덧붙이지 마세요.";
+Sender Info (JSON):
+${JSON.stringify(senderInfo)}
 
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "moonshotai/kimi-k2.5", // fallback or default OpenRouter model, user didn't specify exactly which, standard fallback
-          messages: [
-            { role: "system", content: systemInstruction },
-            { role: "user", content: content }
-          ],
-          temperature: 0.2
-        })
-      });
+Candidate List (JSON):
+${JSON.stringify(candidates)}
+`;
 
-      if (!response.ok) {
-        const errorData = await response.text();
-        console.error("OpenRouter Error:", errorData);
-        return res.status(response.status).json({ error: "Failed to generate content" });
-      }
+      const resultObj = await fetchFromOpenRouter(systemInstruction, content);
+      res.json(resultObj);
+    } catch (error: any) {
+      console.error("Backend API Error:", error?.message || error);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
 
-      const data = await response.json();
-      const refinedText = data.choices?.[0]?.message?.content || content;
-      
-      res.json({ result: refinedText });
-    } catch (error) {
-      console.error("Backend API Error:", error);
+  // API Route for Processing Replies (Filtering only)
+  app.post("/api/process-reply", async (req, res) => {
+    try {
+      const { content } = req.body;
+
+      const systemInstruction = `You are a moderator for a Korean anonymous worry-sharing app.
+1. Check if the reply is inappropriate, abusive, violent, or unhelpful spam.
+2. Return JSON exactly like this:
+   - If bad: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
+   - If good: { "status": "approved" }`;
+
+      const resultObj = await fetchFromOpenRouter(systemInstruction, content);
+      res.json(resultObj);
+    } catch (error: any) {
+      console.error("Reply Filter Error:", error?.message || error);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  // API Route for Processing Comments (Filtering only)
+  app.post("/api/process-comment", async (req, res) => {
+    try {
+      const { content } = req.body;
+
+      const systemInstruction = `You are a moderator for a Korean anonymous worry-sharing app.
+1. Check if the comment left by the publisher is inappropriate, abusive, violent, or spam.
+2. Return JSON exactly like this:
+   - If bad: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
+   - If good: { "status": "approved" }`;
+
+      const resultObj = await fetchFromOpenRouter(systemInstruction, content);
+      res.json(resultObj);
+    } catch (error: any) {
+      console.error("Comment Filter Error:", error?.message || error);
       res.status(500).json({ error: "Internal Server Error" });
     }
   });
