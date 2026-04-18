@@ -1,0 +1,95 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: userId (auth.uid)
+// Fields:
+//   - uid: string (required)
+//   - displayName: string (required)
+//   - photoURL: string (optional)
+//   - createdAt: timestamp (required)
+//
+// Collection: letters
+// Document ID: auto-generated
+// Fields:
+//   - senderId: string (required) - UID of the sender
+//   - receiverId: string (required) - UID of the receiver
+//   - originalContent: string (required)
+//   - refinedContent: string (required)
+//   - type: string (required, enum: ['worry', 'reply'])
+//   - replyTo: string (optional) - ID of the letter being replied to
+//   - createdAt: timestamp (required)
+//   - isRead: boolean (required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isSender() {
+      return isAuthenticated() && request.auth.uid == request.resource.data.senderId;
+    }
+
+    function isReceiver() {
+      return isAuthenticated() && request.auth.uid == resource.data.receiverId;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'createdAt']) &&
+             data.uid is string && data.uid == request.auth.uid &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
+             (!('lastActive' in data) || data.lastActive is timestamp);
+    }
+
+    function isValidLetter(data) {
+      return data.keys().hasAll(['senderId', 'receiverId', 'originalContent', 'refinedContent', 'type', 'createdAt', 'isRead']) &&
+             data.senderId is string && data.senderId == request.auth.uid &&
+             data.receiverId is string &&
+             data.type in ['worry', 'reply'] &&
+             data.originalContent is string && data.originalContent.size() > 0 && data.originalContent.size() < 5000 &&
+             data.refinedContent is string && data.refinedContent.size() > 0 && data.refinedContent.size() < 5000 &&
+             (!('replyTo' in data) || data.replyTo == null || data.replyTo is string) &&
+             (!('replyToContent' in data) || data.replyToContent == null || data.replyToContent is string);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
+    }
+
+    match /letters/{letterId} {
+      // Users can read letters they sent or received
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
+      
+      // Anyone authenticated can create a letter (to send to someone)
+      allow create: if isAuthenticated() && isValidLetter(request.resource.data);
+      
+      // Only receiver can mark as read
+      allow update: if isAuthenticated() && isReceiver() && 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
+    }
+    
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

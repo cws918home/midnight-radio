@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName"]
+    },
+    "Letter": {
+      "title": "Letter",
+      "description": "A letter containing a worry or a reply",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "originalContent": { "type": "string" },
+        "refinedContent": { "type": "string" },
+        "type": { "type": "string", "enum": ["worry", "reply"] },
+        "replyTo": { "type": "string", "description": "ID of the letter being replied to" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isRead": { "type": "boolean" }
+      },
+      "required": ["senderId", "receiverId", "refinedContent", "type", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/letters/{letterId}": {
+      "schema": "Letter",
+      "description": "All letters in the system"
+    }
+  }
+}

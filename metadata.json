@@ -1,0 +1,5 @@
+{
+  "name": "Midnight Radio",
+  "description": "A warm, anonymous radio-themed app where users can broadcast their worries as stories. AI refines the stories into a comforting radio DJ tone and sends them to random listeners, who can then send back warm responses.",
+  "requestFramePermissions": []
+}
