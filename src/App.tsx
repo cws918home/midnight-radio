@@ -183,7 +183,7 @@ export default function App() {
           if (w.receiverId === 'public') return true;
           if (w.receiverId === profile.uid) {
             // Check intersection between worry categories and user interests
-            const worryCats = w.categories || [w.category || '기타'];
+            const worryCats = w.categories || (w.category ? [w.category] : []);
             const userInterests = profile.interests || [];
             return worryCats.some(cat => userInterests.includes(cat));
           }
@@ -316,7 +316,8 @@ export default function App() {
 
       // Step B: Calculate Intersection Score (Worry Categories vs Candidate Interests)
       const scoredCandidates = allUsers.map(u => {
-        const intersection = u.interests.filter(i => selectedCategories.includes(i));
+        const userInterests = u.interests || []; // Safety check for missing interests
+        const intersection = userInterests.filter(i => (selectedCategories || []).includes(i));
         return {
           ...u,
           score: intersection.length
@@ -333,9 +334,9 @@ export default function App() {
       if (finalCandidates.filter(c => c.score > 0).length < 2) {
         console.log("Not enough matching human users. Injecting tailored AI bots...");
         const aiBots = [
-          { uid: 'bot_empathy', gender: 'female', interests: selectedCategories, createdAt: Timestamp.now(), score: 99 },
-          { uid: 'bot_logic', gender: 'male', interests: selectedCategories, createdAt: Timestamp.now(), score: 99 },
-          { uid: 'bot_friend', gender: 'hidden', interests: selectedCategories, createdAt: Timestamp.now(), score: 99 }
+          { uid: 'bot_empathy', gender: 'female', interests: selectedCategories || [], createdAt: Timestamp.now(), score: 99 },
+          { uid: 'bot_logic', gender: 'male', interests: selectedCategories || [], createdAt: Timestamp.now(), score: 99 },
+          { uid: 'bot_friend', gender: 'hidden', interests: selectedCategories || [], createdAt: Timestamp.now(), score: 99 }
         ];
         finalCandidates = [...aiBots, ...finalCandidates].slice(0, 10);
       }
