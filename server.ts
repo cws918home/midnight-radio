@@ -187,6 +187,7 @@ Return JSON: { "content": "Your reply here" }`;
           res.setHeader('Content-Type', 'application/manifest+json');
         }
         if (filePath.endsWith('sw.js')) {
+          res.setHeader('Content-Type', 'application/javascript');
           res.setHeader('Service-Worker-Allowed', '/');
         }
       }
