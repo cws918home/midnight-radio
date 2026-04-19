@@ -12,6 +12,9 @@ export default defineConfig(({mode}) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        devOptions: {
+          enabled: true // 개발 모드에서도 PWA 활성화
+        },
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
         manifest: {
           name: '미드나잇 라디오',
@@ -22,8 +25,8 @@ export default defineConfig(({mode}) => {
           display: 'standalone',
           icons: [
             {
-              src: 'pwa-192x192.png',
-              sizes: '192x192',
+              src: 'pwa-144x144.png',
+              sizes: '144x144',
               type: 'image/png'
             },
             {
