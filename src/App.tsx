@@ -253,10 +253,19 @@ export default function App() {
       if (!initialLoadRef.current) {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'added') {
-            if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification(`📻 미드나잇 라디오 : 누군가 내 고민에 답변을 보냈어요.`, {
-                body: "지금 앱을 열어 답장을 확인해보세요.",
+            const title = `📻 미드나잇 라디오`;
+            const options = {
+              body: "누군가 내 고민에 답변을 보냈어요. 지금 확인해보세요.",
+              icon: '/pwa-192x192.png',
+              badge: '/pwa-192x192.png',
+            };
+
+            if ('serviceWorker' in navigator && Notification.permission === 'granted') {
+              navigator.serviceWorker.ready.then(registration => {
+                registration.showNotification(title, options);
               });
+            } else if (Notification.permission === 'granted') {
+              new Notification(title, options);
             }
           }
         });
@@ -286,10 +295,20 @@ export default function App() {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'modified') {
             const data = change.doc.data() as Letter;
-            if (data.publisherComment && 'Notification' in window && Notification.permission === 'granted') {
-              new Notification(`💌 따뜻한 코멘트 도착`, {
-                body: `내 답장에 상대방이 감사 인사를 남겼어요: "${data.publisherComment}"`,
-              });
+            if (data.publisherComment && Notification.permission === 'granted') {
+              const title = `💌 따뜻한 코멘트 도착`;
+              const options = {
+                body: `상대방이 감사 인사를 남겼어요: "${data.publisherComment}"`,
+                icon: '/pwa-192x192.png',
+              };
+
+              if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.ready.then(registration => {
+                  registration.showNotification(title, options);
+                });
+              } else {
+                new Notification(title, options);
+              }
             }
           }
         });

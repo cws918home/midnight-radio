@@ -26,7 +26,7 @@ export default defineConfig(({mode}) => {
           icons: [
             {
               src: 'pwa-192x192.png',
-              sizes: '144x144',
+              sizes: '192x192',
               type: 'image/png'
             },
             {
