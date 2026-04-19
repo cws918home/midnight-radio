@@ -66,9 +66,10 @@ async function startServer() {
 1. First, check if the content is inappropriate (contains extreme profanity, explicit hate speech, or self-harm/violence).
 2. If inappropriate, YOU MUST RETURN JSON exactly like this: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
 3. If appropriate, select EXACTLY 3 best-matching users from the 'Candidate List' to answer this worry.
-   - Match based on the context of the worry + 'Sender Info' vs the candidate's 'gender', 'interests', and their 'pastWorries' & 'pastReplies'.
-   - EVEN IF candidates are not a perfect match, YOU MUST select EXACTLY 3 uids. Fallback matching is required to guarantee 3 are chosen.
-   - If there are fewer than 3 total candidates provided, duplicate the uids so you return exactly 3, or just return all available.
+   - MATCHING RULE: Prioritize 'interests' and 'gender'. 
+   - STRICT REQUIREMENT: YOU MUST RETURN EXACTLY 3 UIDs from the 'Candidate List'.
+   - FALLBACK: If there are fewer than 3 candidates, just return all of them. If there are NO candidates other than the sender, return an empty list [].
+   - EVEN IF candidates are not a perfect match, YOU MUST select them to guarantee 3 are chosen.
 4. YOU MUST RETURN JSON exactly like this: { "status": "approved", "assignedUids": ["uid1", "uid2", "uid3"] }
 
 Sender Info (JSON):
@@ -79,6 +80,15 @@ ${JSON.stringify(candidates)}
 `;
 
       const resultObj = await fetchFromOpenRouter(systemInstruction, content);
+      
+      // Safety check: ensure assignedUids exists
+      if (resultObj.status === "approved" && !resultObj.assignedUids) {
+        console.warn("LLM returned approved but missing assignedUids. Attempting to fix...");
+        // Look for other possible field names or just take first 3 from candidates
+        const candidatesList = candidates || [];
+        resultObj.assignedUids = candidatesList.slice(0, 3).map((c: any) => c.uid);
+      }
+      
       res.json(resultObj);
     } catch (error: any) {
       console.error("Backend API Error:", error?.message || error);

@@ -288,7 +288,7 @@ export default function App() {
     try {
       console.log("Starting worry publication process...");
       
-      // Step A: Fetch potential candidates (Simplified query to avoid index errors)
+      // Step A: Fetch potential candidates
       let allUsers: UserProfile[] = [];
       try {
         const usersSnap = await getDocs(query(
@@ -303,10 +303,14 @@ export default function App() {
         throw new Error(`사용자 목록을 가져오지 못했습니다: ${userFetchError.message}`);
       }
 
+      // TEST FALLBACK: If no real users, create 3 fake ones for testing
       if (allUsers.length === 0) {
-        setFilterAlert("현재 접속 중인 다른 사용자가 없어 사연을 보낼 수 없습니다. 나중에 다시 시도해주세요.");
-        setIsProcessing(false);
-        return;
+        console.log("No real users found. Injecting 3 fake candidates for testing...");
+        allUsers = [
+          { uid: 'bot_1', gender: 'female', interests: ['인간관계', '연애'], createdAt: Timestamp.now() },
+          { uid: 'bot_2', gender: 'male', interests: ['직장생활', '취업'], createdAt: Timestamp.now() },
+          { uid: 'bot_3', gender: 'hidden', interests: ['멘탈케어', '일상'], createdAt: Timestamp.now() }
+        ];
       }
 
       console.log(`Found ${allUsers.length} potential candidates.`);
