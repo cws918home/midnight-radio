@@ -17,22 +17,27 @@ export default defineConfig(({mode}) => {
         },
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
         manifest: {
+          id: '/midnight-radio',
           name: '미드나잇 라디오',
           short_name: '미드나잇',
           description: '밤을 위로하는 익명 라디오 사연 앱',
           theme_color: '#FDFCF8',
           background_color: '#FDFCF8',
           display: 'standalone',
+          start_url: '/',
+          scope: '/',
           icons: [
             {
               src: 'pwa-192x192.png',
               sizes: '192x192',
-              type: 'image/png'
+              type: 'image/png',
+              purpose: 'any maskable'
             },
             {
               src: 'pwa-512x512.png',
               sizes: '512x512',
-              type: 'image/png'
+              type: 'image/png',
+              purpose: 'any maskable'
             }
           ]
         }

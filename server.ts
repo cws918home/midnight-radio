@@ -179,10 +179,14 @@ Return JSON: { "content": "Your reply here" }`;
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    // Serve static files (manifest, icons, etc.)
+    
+    // Serve static files with correct MIME types for PWA
     app.use(express.static(distPath, {
-      setHeaders: (res, path) => {
-        if (path.endsWith('.js')) {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.webmanifest')) {
+          res.setHeader('Content-Type', 'application/manifest+json');
+        }
+        if (filePath.endsWith('sw.js')) {
           res.setHeader('Service-Worker-Allowed', '/');
         }
       }

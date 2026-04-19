@@ -89,6 +89,7 @@ export default function App() {
 
   useEffect(() => {
     const handler = (e: any) => {
+      console.log('PWA: beforeinstallprompt event fired!');
       e.preventDefault();
       setDeferredPrompt(e);
       setIsInstallable(true);
@@ -867,10 +868,10 @@ export default function App() {
               <button onClick={() => setView('home')} className="mb-6 flex items-center gap-2 text-[#8B8B6B] hover:text-[#5A5A40] transition-colors">
                 <ArrowLeft className="w-4 h-4" /> 돌아가기
               </button>
-              <h2 className="text-2xl font-serif font-bold mb-2">고민을 적어보세요</h2>
-              <p className="text-[#8B8B6B] mb-8">당신의 날선 감정도, 속상함도 AI가 따뜻하고 차분한 어조로 다듬어 누군가에게 송출해 줍니다.</p>
+              <h2 className="text-2xl font-serif font-bold mb-2">당신의 이야기를 들려주세요</h2>
+              <p className="text-[#8B8B6B] mb-8">마음 한구석에 담아둔 고민을 적어보세요. AI 안심 필터가 내용을 확인한 뒤, 가장 따뜻한 답변을 줄 수 있는 이웃에게 사연을 전달합니다.</p>
               
-              <WriteForm type="worry" isProcessing={isProcessing} onSubmit={(content, cat) => publishWorry(content, cat!)} />
+              <WriteForm type="worry" isProcessing={isProcessing} onSubmit={(content, cats) => publishWorry(content, cats!)} />
             </motion.div>
           )}
 
