@@ -27,7 +27,7 @@ import {
   Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, Trash2
 } from 'lucide-react';
 import { cn } from './lib/utils';
-import { processWorry, processReply, generateAIReply } from './services/geminiService';
+import { processWorry, processReply, generateAIReply, processComment } from './services/geminiService';
 
 // --- Constants ---
 const CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래'];
@@ -266,6 +266,7 @@ export default function App() {
     if (!user) return;
     setIsProcessing(true);
     try {
+      console.log("Submitting onboarding data...");
       const userRef = doc(db, 'users', user.uid);
       const newProfile = {
         uid: user.uid,
@@ -276,10 +277,13 @@ export default function App() {
         lastActive: serverTimestamp()
       };
       await setDoc(userRef, newProfile, { merge: true });
-      setProfile({ ...profile, ...newProfile } as UserProfile);
-      setView('home');
-    } catch (e) {
-      console.error(e);
+      console.log("Profile saved to Firestore.");
+      
+      setProfile(newProfile as UserProfile);
+      setView('home'); // Explicitly switch view
+    } catch (e: any) {
+      console.error("Onboarding Submit Error:", e);
+      alert(`설정 저장에 실패했습니다: ${e.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -376,23 +380,28 @@ export default function App() {
           if (receiverId.startsWith('bot_')) {
             const botObj = allUsers.find(u => u.uid === receiverId);
             if (botObj) {
-              console.log(`Generating AI reply for ${receiverId}...`);
-              const aiResponse = await generateAIReply(content, botObj);
+              try {
+                console.log(`Generating AI reply for ${receiverId}...`);
+                const aiResponse = await generateAIReply(content, botObj);
+                const replyText = aiResponse.content || "당신의 고민을 잘 읽었어요. 마음이 따뜻해지는 밤 되시길 바랄게요.";
 
-              // Save AI Reply back to user
-              await addDoc(collection(db, 'letters'), {
-                senderId: receiverId, 
-                receiverId: user.uid,
-                originalContent: aiResponse.content,
-                refinedContent: aiResponse.content,
-                type: 'reply',
-                replyTo: worryRef.id,
-                replyToContent: content,
-                createdAt: serverTimestamp(),
-                isRead: false,
-                feedback: null
-              });
-              console.log(`AI reply from ${receiverId} saved.`);
+                // Save AI Reply back to user
+                await addDoc(collection(db, 'letters'), {
+                  senderId: receiverId, 
+                  receiverId: user.uid,
+                  originalContent: replyText,
+                  refinedContent: replyText,
+                  type: 'reply',
+                  replyTo: worryRef.id,
+                  replyToContent: content,
+                  createdAt: serverTimestamp(),
+                  isRead: false,
+                  feedback: null
+                });
+                console.log(`AI reply from ${receiverId} saved.`);
+              } catch (botErr) {
+                console.error(`Individual bot reply failed for ${receiverId}:`, botErr);
+              }
             }
           }
         }));
@@ -619,7 +628,13 @@ export default function App() {
               ) : (
                 <div className="grid gap-6">
                   {feedWorries.map(worry => (
-                    <div key={worry.id} className="bg-white p-6 rounded-2xl shadow-sm border border-[#FAEDCD]">
+                    <div key={worry.id} className="bg-white p-6 rounded-2xl shadow-sm border border-[#FAEDCD] relative group">
+                      <button 
+                        onClick={(e) => deleteLetter(e, worry.id)}
+                        className="absolute top-4 right-4 p-2 text-[#8B8B6B] opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                       <div className="flex items-center gap-2 mb-4">
                         <span className="px-2.5 py-1 bg-[#FAEDCD] text-[#D4A373] text-[10px] font-bold rounded-lg border border-[#E9EDC9]">
                           {worry.category || '기타'}
