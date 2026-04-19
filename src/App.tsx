@@ -24,8 +24,9 @@ import {
 import { auth, db } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, Trash2, FileText, Bell
+  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, Trash2, FileText, Bell, Share2, QrCode
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
 import { processWorry, processReply, generateAIReply, processComment } from './services/geminiService';
 
@@ -81,6 +82,31 @@ export default function App() {
   
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // PWA Install Logic
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setIsInstallable(false);
+      setDeferredPrompt(null);
+    }
+  };
+
   const [notificationPermission, setNotificationPermission] = useState<string>(
     'Notification' in window ? Notification.permission : 'denied'
   );
@@ -671,6 +697,76 @@ export default function App() {
                 {notificationPermission === 'denied' && (
                   <p className="text-[10px] text-[#E07A5F] text-center">브라우저 설정에서 알림 권한을 직접 허용해 주세요.</p>
                 )}
+              </div>
+
+              <div className="bg-[#5A5A40] p-8 rounded-3xl text-white space-y-8 shadow-xl">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center">
+                    <QrCode className="w-5 h-5 text-[#FAEDCD]" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">어플 다운로드 / 공유</h3>
+                    <p className="text-sm text-[#FAEDCD]/80">바탕화면에 설치하여 진짜 앱처럼 쓰세요.</p>
+                  </div>
+                </div>
+
+                {/* 1. One-Click Install Button (Android/Chrome) */}
+                {isInstallable && (
+                  <button 
+                    onClick={handleInstallClick}
+                    className="w-full py-4 bg-[#E07A5F] text-white rounded-2xl font-bold shadow-lg hover:scale-[1.02] transition-all flex items-center justify-center gap-3"
+                  >
+                    <Send className="w-5 h-5 rotate-90" /> 지금 바로 어플 설치하기
+                  </button>
+                )}
+                
+                {/* 2. QR Section */}
+                <div className="bg-white p-4 rounded-2xl w-fit mx-auto shadow-inner">
+                  <QRCodeSVG 
+                    value={window.location.origin} 
+                    size={140}
+                    level="H"
+                  />
+                </div>
+
+                {/* 3. Detailed Instructions */}
+                <div className="space-y-6 pt-4 border-t border-white/10">
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-[#FAEDCD] flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-[#E07A5F] rounded-full" /> 아이폰(iOS) 설치 방법
+                    </h4>
+                    <p className="text-[11px] text-[#FAEDCD]/70 leading-relaxed pl-3">
+                      1. 하단 메뉴의 <strong className="text-white">[공유 버튼 <Share2 className="w-3 h-3 inline mb-0.5" />]</strong>을 누릅니다.<br/>
+                      2. 리스트를 내려 <strong className="text-white">[홈 화면에 추가]</strong>를 누릅니다.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-[#FAEDCD] flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-[#A3B18A] rounded-full" /> 안드로이드 설치 방법
+                    </h4>
+                    <p className="text-[11px] text-[#FAEDCD]/70 leading-relaxed pl-3">
+                      1. 상단 <strong className="text-white">[설치 버튼]</strong>을 누르거나,<br/>
+                      2. 브라우저 우측 상단 <strong className="text-white">[점 세개]</strong> 메뉴에서 <strong className="text-white">[앱 설치]</strong>를 누릅니다.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-center">
+                  <button 
+                    onClick={() => {
+                      if (navigator.share) {
+                        navigator.share({ title: '미드나잇 라디오', text: '당신의 밤을 위로하는 익명 라디오 사연 앱', url: window.location.origin });
+                      } else {
+                        navigator.clipboard.writeText(window.location.origin);
+                        alert("링크가 복사되었습니다!");
+                      }
+                    }}
+                    className="flex items-center gap-2 mx-auto text-xs font-bold bg-white/10 px-4 py-2 rounded-full hover:bg-white/20 transition-all"
+                  >
+                    <Share2 className="w-3 h-3" /> 링크 공유하기
+                  </button>
+                </div>
               </div>
 
               <div className="text-left space-y-2 mb-10">
