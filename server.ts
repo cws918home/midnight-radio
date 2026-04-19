@@ -1,22 +1,27 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+dotenv.config(); // Explicitly call config
+
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 
 async function fetchFromOpenRouter(systemInstruction: string, userContent: string) {
   const apiKey = process.env.OPENROUTER_API_KEY;
+  
   if (!apiKey) {
-    console.error("Error: OPENROUTER_API_KEY is missing from environment variables.");
-    throw new Error("OPENROUTER_API_KEY environment variable is required");
+    console.error("CRITICAL ERROR: OPENROUTER_API_KEY is missing!");
+    throw new Error("OPENROUTER_API_KEY is not defined in .env file");
   }
 
+  console.log(`Attempting to call OpenRouter with model: moonshotai/kimi-k2.5`);
+  
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:3000", // Required or recommended by some OpenRouter models
+        "HTTP-Referer": "http://localhost:3000",
         "X-Title": "Midnight Radio"
       },
       body: JSON.stringify({
@@ -25,28 +30,40 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
           { role: "system", content: systemInstruction },
           { role: "user", content: userContent }
         ],
-        response_format: { type: "json_object" },
-        temperature: 0.1
+        temperature: 0.1,
+        max_tokens: 1000 // Limit tokens to stay within credit budget
       })
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`OpenRouter API Error (${response.status}):`, errText);
+      console.error(`OpenRouter API Error Status: ${response.status}`);
+      console.error(`OpenRouter API Error Body: ${errText}`);
       throw new Error(`OpenRouter API Error: ${response.status} ${errText}`);
     }
 
     const data = await response.json();
-    const textContent = data.choices?.[0]?.message?.content || "{}";
+    console.log("Successfully received response from OpenRouter.");
+    
+    let textContent = data.choices?.[0]?.message?.content || "{}";
+    
+    // Sometimes models wrap JSON in code blocks like ```json ... ```
+    if (textContent.includes("```")) {
+      textContent = textContent.replace(/```json|```/g, "").trim();
+    }
     
     try {
       return JSON.parse(textContent);
     } catch (parseError) {
-      console.error("Failed to parse LLM response as JSON:", textContent);
-      return { status: "error", reason: "응답 형식이 올바르지 않습니다." };
+      console.error("JSON Parse Error. Raw content:", textContent);
+      // Fallback response if JSON parsing fails
+      if (textContent.includes("approved")) {
+        return { status: "approved", assignedUids: [] };
+      }
+      return { status: "error", reason: "응답 해석 실패" };
     }
   } catch (error: any) {
-    console.error("Fetch error in fetchFromOpenRouter:", error.message);
+    console.error("Fetch operation failed:", error.message);
     throw error;
   }
 }
