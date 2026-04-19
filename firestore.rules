@@ -12,11 +12,16 @@ service cloud.firestore {
     }
 
     match /letters/{letterId} {
-      allow read: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
+      // 1. 고민(worry)은 모든 로그인 사용자가 읽을 수 있음 (관심사 필터링을 위해)
+      // 2. 답장(reply)은 보낸 사람이나 받은 사람만 읽을 수 있음
+      allow read: if isAuthenticated() && (
+        resource.data.type == 'worry' || 
+        request.auth.uid == resource.data.senderId || 
+        request.auth.uid == resource.data.receiverId
+      );
+      
       allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
-      allow update: if isAuthenticated();
-      // 보낸 사람이나 받은 사람만 삭제 가능
-      allow delete: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
+      allow update, delete: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
     }
     
     match /test/connection {

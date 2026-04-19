@@ -157,7 +157,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [profile]);
 
-  // Feed (Worries direct to me) Listener + Mock Injection
+  // Feed (Worries direct to me) Listener
   useEffect(() => {
     if (!profile) return;
 
@@ -173,39 +173,20 @@ export default function App() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let worries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter));
       
-      // Filter public worries by user interests
+      // Filter logic:
+      // 1. If receiverId is 'public', show to everyone (Admin/Global worries)
+      // 2. If receiverId is MY UID, show ONLY if it matches MY INTERESTS
       worries = worries.filter(w => {
         if (w.receiverId === 'public') {
-          return profile.interests.includes(w.category || '');
+          return true; // Admin set public worries are visible to everyone
         }
-        return true; // Personal assigned worries are always shown
+        // Personal worries must match interests
+        return profile.interests.includes(w.category || '');
       });
-      
-      // Inject Mock Data...
-      if (worries.length === 0 && profile.interests.length > 0) {
-        const MOCK_DB: Record<string, string> = {
-          '진로/취업': '요즘 취업 준비 때문에 너무 스트레스 받아요. 계속 떨어지다 보니 제 자신이 부족해 보이고 자존감이 바닥을 쳐요...',
-          '연애/사랑': '만난 지 2년 된 연인과 자꾸 사소한 일로 다투게 돼요. 사랑하는 마음은 그대로인데 어떻게 다시 예전처럼 돌아갈 수 있을까요?',
-          '인간관계': '가장 믿었던 친구에게 서운한 일이 있었는데, 쪼잔해 보일까봐 말을 꺼내기가 조심스러워서 혼자 끙끙 앓고 있어요.',
-          '직장생활': '직장 상사와의 관계가 너무 힘듭니다. 매번 제 노력은 무시하고 질책만 하시는데, 이직을 해야할지 고민이에요.',
-          '멘탈케어': '요즘 아무 이유 없이 우울하고 무기력해질 때가 많아요. 다시 예전의 활기찬 모습으로 돌아가고 싶은데 마음처럼 쉽지 않네요.',
-          '일상': '매일 똑같이 반복되는 지루한 일상 속에서 뭔가 작지만 확실한 행복을 찾고 싶어요. 다들 지칠 때 어떻게 스트레스를 푸시나요?'
-        };
-
-        worries = profile.interests.map((interest, idx) => ({
-          id: `mock_worry_${idx}`,
-          senderId: 'system_mock',
-          receiverId: profile.uid,
-          originalContent: MOCK_DB[interest] || '요즘 고민이 많네요. 어떻게 해야 할까요?',
-          refinedContent: MOCK_DB[interest] || '요즘 고민이 많네요. 어떻게 해야 할까요?',
-          type: 'worry',
-          category: interest,
-          createdAt: Timestamp.now(),
-          isRead: false
-        }));
-      }
 
       setFeedWorries(worries);
+    }, (err) => {
+      console.error("Feed Listener Error:", err);
     });
 
     return () => unsubscribe();
@@ -268,7 +249,8 @@ export default function App() {
     try {
       console.log("Submitting onboarding data...");
       const userRef = doc(db, 'users', user.uid);
-      const newProfile = {
+      
+      const newProfileData = {
         uid: user.uid,
         gender,
         interests,
@@ -276,11 +258,23 @@ export default function App() {
         createdAt: profile?.createdAt || serverTimestamp(),
         lastActive: serverTimestamp()
       };
-      await setDoc(userRef, newProfile, { merge: true });
-      console.log("Profile saved to Firestore.");
       
-      setProfile(newProfile as UserProfile);
-      setView('home'); // Explicitly switch view
+      await setDoc(userRef, newProfileData, { merge: true });
+      
+      // Update local state and then wait a bit before switching view
+      const updatedProfile = { 
+        ...newProfileData, 
+        createdAt: profile?.createdAt || Timestamp.now() 
+      } as UserProfile;
+      
+      setProfile(updatedProfile);
+      
+      // Force view change with a small delay to ensure Firestore write is propagated
+      setTimeout(() => {
+        setView('home');
+        window.scrollTo(0, 0);
+      }, 200);
+
     } catch (e: any) {
       console.error("Onboarding Submit Error:", e);
       alert(`설정 저장에 실패했습니다: ${e.message}`);
@@ -303,37 +297,43 @@ export default function App() {
       
       // Step A: Fetch potential candidates
       let allUsers: UserProfile[] = [];
-      try {
-        const usersSnap = await getDocs(query(
-          collection(db, 'users'), 
-          limit(30)
-        ));
-        allUsers = usersSnap.docs
-          .map(d => d.data() as UserProfile)
-          .filter(u => u.uid !== user.uid);
-      } catch (userFetchError: any) {
-        console.error("Firestore Users Fetch Error:", userFetchError);
-        throw new Error(`사용자 목록을 가져오지 못했습니다: ${userFetchError.message}`);
-      }
+      const usersSnap = await getDocs(query(collection(db, 'users'), limit(50)));
+      allUsers = usersSnap.docs
+        .map(d => d.data() as UserProfile)
+        .filter(u => u.uid !== user.uid);
 
-      // TEST FALLBACK: If no real users, create 3 fake ones for testing
-      if (allUsers.length === 0) {
-        console.log("No real users found. Injecting 3 fake candidates for testing...");
-        allUsers = [
-          { uid: 'bot_1', gender: 'female', interests: ['인간관계', '연애'], createdAt: Timestamp.now() },
-          { uid: 'bot_2', gender: 'male', interests: ['직장생활', '취업'], createdAt: Timestamp.now() },
-          { uid: 'bot_3', gender: 'hidden', interests: ['멘탈케어', '일상'], createdAt: Timestamp.now() }
+      // Step B: Calculate Interest Intersection Score
+      const scoredCandidates = allUsers.map(u => {
+        const intersection = u.interests.filter(i => profile.interests.includes(i));
+        return {
+          ...u,
+          score: intersection.length
+        };
+      });
+
+      // Sort by score (descending)
+      scoredCandidates.sort((a, b) => b.score - a.score);
+
+      // Take top human candidates
+      let finalCandidates = scoredCandidates.slice(0, 10);
+
+      // Step C: If no good human matches (score 0), inject tailored AI bots
+      if (finalCandidates.filter(c => c.score > 0).length < 2) {
+        console.log("Not enough matching human users. Injecting tailored AI bots...");
+        const aiBots = [
+          { uid: 'bot_empathy', gender: 'female', interests: profile.interests, createdAt: Timestamp.now(), score: 99 },
+          { uid: 'bot_logic', gender: 'male', interests: profile.interests, createdAt: Timestamp.now(), score: 99 },
+          { uid: 'bot_friend', gender: 'hidden', interests: profile.interests, createdAt: Timestamp.now(), score: 99 }
         ];
+        finalCandidates = [...aiBots, ...finalCandidates].slice(0, 10);
       }
 
-      console.log(`Found ${allUsers.length} potential candidates.`);
+      console.log(`Matching process: Found ${finalCandidates.length} potential candidates.`);
 
-      const decoratedCandidates = allUsers.map(u => ({
+      const decoratedCandidates = finalCandidates.map(u => ({
         uid: u.uid,
         gender: u.gender,
         interests: u.interests,
-        pastWorries: [],
-        pastReplies: [],
       }));
 
       const senderInfo = {
@@ -341,8 +341,8 @@ export default function App() {
         interests: profile.interests
       };
 
-      // Step B: Call Backend LLM
-      console.log("Calling LLM backend...");
+      // Step D: Call Backend LLM for final 3 assignment
+      console.log("Calling LLM backend for matching...");
       const result = await processWorry(content, decoratedCandidates, senderInfo);
 
       if (result.status === 'rejected') {

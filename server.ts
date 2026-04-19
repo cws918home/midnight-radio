@@ -80,14 +80,13 @@ async function startServer() {
       const { content, candidates, senderInfo } = req.body;
 
       const systemInstruction = `You are an AI moderator and routing engine for a Korean anonymous worry-sharing app.
-1. First, check if the content is inappropriate (contains extreme profanity, explicit hate speech, or self-harm/violence).
-2. If inappropriate, YOU MUST RETURN JSON exactly like this: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
-3. If appropriate, select EXACTLY 3 best-matching users from the 'Candidate List' to answer this worry.
-   - MATCHING RULE: Prioritize 'interests' and 'gender'. 
-   - STRICT REQUIREMENT: YOU MUST RETURN EXACTLY 3 UIDs from the 'Candidate List'.
-   - FALLBACK: If there are fewer than 3 candidates, just return all of them. If there are NO candidates other than the sender, return an empty list [].
-   - EVEN IF candidates are not a perfect match, YOU MUST select them to guarantee 3 are chosen.
-4. YOU MUST RETURN JSON exactly like this: { "status": "approved", "assignedUids": ["uid1", "uid2", "uid3"] }
+1. Check for inappropriate content. If bad, return: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
+2. If appropriate, select EXACTLY 3 best-matching users from the 'Candidate List'.
+   - MATCHING RULE: Prioritize candidates who have the LARGEST INTERSECTION (overlap) of interests with the sender. 
+   - SECONDARY RULE: Consider gender and the context of the worry.
+   - FALLBACK: If human candidates are poor matches, the list will include high-match AI bots (uid starts with 'bot_'). Prefer these if they match interests better than available humans.
+   - YOU MUST return exactly 3 UIDs in order of match quality.
+3. RETURN JSON: { "status": "approved", "assignedUids": ["uid1", "uid2", "uid3"] }
 
 Sender Info (JSON):
 ${JSON.stringify(senderInfo)}
