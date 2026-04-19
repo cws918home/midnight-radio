@@ -13,6 +13,7 @@ import {
   serverTimestamp, 
   doc,
   updateDoc,
+  deleteDoc,
   orderBy,
   limit,
   Timestamp,
@@ -23,10 +24,10 @@ import {
 import { auth, db } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp
+  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, Trash2
 } from 'lucide-react';
 import { cn } from './lib/utils';
-import { processWorry, processReply } from './services/geminiService';
+import { processWorry, processReply, generateAIReply } from './services/geminiService';
 
 // --- Constants ---
 const CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래'];
@@ -160,11 +161,11 @@ export default function App() {
   useEffect(() => {
     if (!profile) return;
 
-    // Fetch ONLY worries assigned specifically to THIS user by the LLM (or mock)
+    // Fetch worries assigned to ME or marked as PUBLIC
     const q = query(
       collection(db, 'letters'),
       where('type', '==', 'worry'),
-      where('receiverId', '==', profile.uid),
+      where('receiverId', 'in', [profile.uid, 'public']),
       orderBy('createdAt', 'desc'),
       limit(50)
     );
@@ -172,7 +173,15 @@ export default function App() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let worries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter));
       
-      // Inject Mock Data if feed is empty (to simulate pre-existing worries waiting for this newly joined user's response)
+      // Filter public worries by user interests
+      worries = worries.filter(w => {
+        if (w.receiverId === 'public') {
+          return profile.interests.includes(w.category || '');
+        }
+        return true; // Personal assigned worries are always shown
+      });
+      
+      // Inject Mock Data...
       if (worries.length === 0 && profile.interests.length > 0) {
         const MOCK_DB: Record<string, string> = {
           '진로/취업': '요즘 취업 준비 때문에 너무 스트레스 받아요. 계속 떨어지다 보니 제 자신이 부족해 보이고 자존감이 바닥을 쳐요...',
@@ -351,7 +360,8 @@ export default function App() {
       // Step C: Save to Firestore
       try {
         await Promise.all(assignedIds.map(async (receiverId: string) => {
-          await addDoc(collection(db, 'letters'), {
+          // 1. Save the Worry
+          const worryRef = await addDoc(collection(db, 'letters'), {
             senderId: user.uid,
             receiverId, 
             originalContent: content,
@@ -361,12 +371,35 @@ export default function App() {
             createdAt: serverTimestamp(),
             isRead: false
           });
+
+          // 2. If it's a bot, trigger AI reply
+          if (receiverId.startsWith('bot_')) {
+            const botObj = allUsers.find(u => u.uid === receiverId);
+            if (botObj) {
+              console.log(`Generating AI reply for ${receiverId}...`);
+              const aiResponse = await generateAIReply(content, botObj);
+
+              // Save AI Reply back to user
+              await addDoc(collection(db, 'letters'), {
+                senderId: receiverId, 
+                receiverId: user.uid,
+                originalContent: aiResponse.content,
+                refinedContent: aiResponse.content,
+                type: 'reply',
+                replyTo: worryRef.id,
+                replyToContent: content,
+                createdAt: serverTimestamp(),
+                isRead: false,
+                feedback: null
+              });
+              console.log(`AI reply from ${receiverId} saved.`);
+            }
+          }
         }));
       } catch (saveError: any) {
         console.error("Firestore Save Error:", saveError);
         throw new Error(`사연 저장 중 오류가 발생했습니다: ${saveError.message}`);
       }
-
       console.log("All letters saved to Firestore.");
       setView('home');
     } catch (e: any) {
@@ -428,6 +461,18 @@ export default function App() {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const deleteLetter = async (e: React.MouseEvent, letterId: string) => {
+    e.stopPropagation(); // Prevent opening the letter view
+    if (!confirm("이 메시지를 삭제하시겠습니까?")) return;
+    try {
+      await deleteDoc(doc(db, 'letters', letterId));
+      console.log("Letter deleted:", letterId);
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("삭제에 실패했습니다.");
     }
   };
 
@@ -667,10 +712,16 @@ export default function App() {
                                 setView('read_reply'); 
                               }}
                               className={cn(
-                                "w-full text-left p-6 rounded-2xl border transition-all",
+                                "w-full text-left p-6 rounded-2xl border transition-all relative group",
                                 reply.isRead ? "bg-white border-[#E9EDC9]" : "bg-[#FAEDCD] border-[#D4A373] shadow-md"
                               )}
                             >
+                              <button 
+                                onClick={(e) => deleteLetter(e, reply.id)}
+                                className="absolute top-4 right-4 p-2 text-[#8B8B6B] opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                               <div className="flex items-center gap-2 mb-3">
                                 <Headphones className={cn("w-4 h-4", reply.isRead ? "text-[#A3B18A]" : "text-[#E07A5F]")} />
                                 <span className="text-xs font-semibold text-[#8B8B6B]">누군가의 따뜻한 답장</span>
@@ -703,8 +754,14 @@ export default function App() {
                                 setSelectedReply(reply); 
                                 setView('read_my_reply'); 
                               }}
-                              className="w-full text-left p-6 bg-white rounded-2xl border border-[#E9EDC9] transition-all hover:bg-[#FAEDCD]"
+                              className="w-full text-left p-6 bg-white rounded-2xl border border-[#E9EDC9] transition-all hover:bg-[#FAEDCD] relative group"
                             >
+                              <button 
+                                onClick={(e) => deleteLetter(e, reply.id)}
+                                className="absolute top-4 right-4 p-2 text-[#8B8B6B] opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                               <div className="flex items-center gap-2 mb-3">
                                 <Send className="w-4 h-4 text-[#A3B18A]" />
                                 <span className="text-xs font-semibold text-[#8B8B6B]">나의 다정한 위로</span>

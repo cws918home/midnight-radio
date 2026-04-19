@@ -7,21 +7,16 @@ service cloud.firestore {
     }
     
     match /users/{userId} {
-      // 로그인된 사용자라면 누구나 읽기 가능 (목록 조회 포함)
       allow read: if isAuthenticated();
-      // 자기 자신의 프로필만 생성/수정 가능
       allow create, update: if isAuthenticated() && request.auth.uid == userId;
     }
 
     match /letters/{letterId} {
-      // 자신이 보냈거나 받은 편지만 읽기 가능
-      allow read: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == request.auth.uid == resource.data.receiverId);
-      
-      // 로그인된 사용자는 편지 생성 가능 (보내는 사람 ID 검증)
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
       allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
-      
-      // 모든 로그인된 사용자의 업데이트 허용 (마크 읽음 처리 등)
       allow update: if isAuthenticated();
+      // 보낸 사람이나 받은 사람만 삭제 가능
+      allow delete: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
     }
     
     match /test/connection {

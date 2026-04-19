@@ -113,6 +113,25 @@ ${JSON.stringify(candidates)}
     }
   });
 
+  // API Route for generating an AI reply (for bots)
+  app.post("/api/generate-ai-reply", async (req, res) => {
+    try {
+      const { worryContent, botInfo } = req.body;
+      const systemInstruction = `You are a warm, empathetic person who just received an anonymous worry. 
+Your persona: ${botInfo.gender === 'female' ? 'A kind sister/older woman' : 'A supportive brother/older man'}. 
+Interests: ${botInfo.interests.join(', ')}.
+Task: Write a comforting, personal reply to the worry. Keep it between 2-4 sentences. Use a warm, polite Korean tone (해요체). 
+Do NOT use professional counselor jargon. Sound like a real person.
+Return JSON: { "content": "Your reply here" }`;
+
+      const resultObj = await fetchFromOpenRouter(systemInstruction, worryContent);
+      res.json(resultObj);
+    } catch (error: any) {
+      console.error("AI Reply Generation Error:", error?.message || error);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
   // API Route for Processing Replies (Filtering only)
   app.post("/api/process-reply", async (req, res) => {
     try {

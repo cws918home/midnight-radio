@@ -13,6 +13,21 @@ export async function processWorry(content: string, candidates: any[], senderInf
   }
 }
 
+export async function generateAIReply(worryContent: string, botInfo: any): Promise<any> {
+  try {
+    const response = await fetch('/api/generate-ai-reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worryContent, botInfo })
+    });
+    if (!response.ok) throw new Error("Failed to generate AI reply");
+    return await response.json();
+  } catch (error) {
+    console.error("AI Reply Error:", error);
+    return { content: "당신의 고민을 잘 들었어요. 항상 응원할게요." };
+  }
+}
+
 export async function processReply(content: string): Promise<any> {
   try {
     const response = await fetch('/api/process-reply', {
