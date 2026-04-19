@@ -49,13 +49,14 @@ interface UserProfile {
 interface Letter {
   id: string;
   senderId: string;
-  receiverId: string; // 'public' for worries, specific uid for replies
+  receiverId: string; 
   originalContent: string;
   refinedContent: string;
   type: 'worry' | 'reply';
-  category?: string;
-  replyTo?: string;             // Original Worry ID
-  replyToContent?: string;      // Original Worry Content
+  categories?: string[]; // Multiple categories
+  category?: string;     // Backward compatibility
+  replyTo?: string;             
+  replyToContent?: string;      
   createdAt: Timestamp;
   isRead: boolean;
   feedback?: 'helpful' | 'not_helpful' | null;
@@ -114,9 +115,13 @@ export default function App() {
         // Automatic Anonymous Sign-in
         try {
           await signInAnonymously(auth);
-        } catch (err) {
+        } catch (err: any) {
           console.error("Anon Login Error", err);
-          setError("네트워크 문제로 익명 접속에 실패했습니다.");
+          if (err.code === 'auth/admin-restricted-operation') {
+            setError("Firebase 콘솔에서 '익명 로그인'을 활성화해야 합니다.");
+          } else {
+            setError("네트워크 문제로 익명 접속에 실패했습니다.");
+          }
           setLoading(false);
         }
       }
@@ -155,36 +160,41 @@ export default function App() {
     return () => clearInterval(interval);
   }, [profile]);
 
-  // Feed (Worries direct to me) Listener
+  // Feed (Worries direct to me or public)
   useEffect(() => {
     if (!profile) return;
 
-    // Fetch worries assigned to ME or marked as PUBLIC
+    // Simplify query: just get worries, filter the rest on client to avoid permission/index errors
     const q = query(
       collection(db, 'letters'),
       where('type', '==', 'worry'),
-      where('receiverId', 'in', [profile.uid, 'public']),
       orderBy('createdAt', 'desc'),
-      limit(50)
+      limit(100)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      let worries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter));
-      
-      // Filter logic:
-      // 1. If receiverId is 'public', show to everyone (Admin/Global worries)
-      // 2. If receiverId is MY UID, show ONLY if it matches MY INTERESTS
-      worries = worries.filter(w => {
-        if (w.receiverId === 'public') {
-          return true; // Admin set public worries are visible to everyone
-        }
-        // Personal worries must match interests
-        return profile.interests.includes(w.category || '');
-      });
+      try {
+        const allWorries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter));
+        
+        // Final Filter Logic:
+        // 1. Show if receiverId is 'public' (Admin/Global)
+        // 2. OR Show if receiverId is MY UID AND it matches MY INTERESTS
+        const filtered = allWorries.filter(w => {
+          if (w.receiverId === 'public') return true;
+          if (w.receiverId === profile.uid) {
+            return profile.interests.includes(w.category || '');
+          }
+          return false;
+        });
 
-      setFeedWorries(worries);
+        setFeedWorries(filtered);
+      } catch (err) {
+        console.error("Error processing worries:", err);
+      }
     }, (err) => {
       console.error("Feed Listener Error:", err);
+      // If still failing, it might be an index issue. 
+      // Try even simpler query as absolute fallback
     });
 
     return () => unsubscribe();
@@ -287,7 +297,7 @@ export default function App() {
   const [filterAlert, setFilterAlert] = useState<string | null>(null);
 
   // 1. Publish Worry -> Backend LLM Routing
-  const publishWorry = async (content: string, category: string) => {
+  const publishWorry = async (content: string, selectedCategories: string[]) => {
     if (!user || !profile) {
       setFilterAlert("로그인 정보가 없습니다.");
       return;
@@ -295,7 +305,7 @@ export default function App() {
     setIsProcessing(true);
     try {
       console.log("Starting worry publication process...");
-      
+
       // Step A: Fetch potential candidates
       let allUsers: UserProfile[] = [];
       const usersSnap = await getDocs(query(collection(db, 'users'), limit(50)));
@@ -303,9 +313,9 @@ export default function App() {
         .map(d => d.data() as UserProfile)
         .filter(u => u.uid !== user.uid);
 
-      // Step B: Calculate Interest Intersection Score
+      // Step B: Calculate Intersection Score (Worry Categories vs Candidate Interests)
       const scoredCandidates = allUsers.map(u => {
-        const intersection = u.interests.filter(i => profile.interests.includes(i));
+        const intersection = u.interests.filter(i => selectedCategories.includes(i));
         return {
           ...u,
           score: intersection.length
@@ -322,9 +332,9 @@ export default function App() {
       if (finalCandidates.filter(c => c.score > 0).length < 2) {
         console.log("Not enough matching human users. Injecting tailored AI bots...");
         const aiBots = [
-          { uid: 'bot_empathy', gender: 'female', interests: profile.interests, createdAt: Timestamp.now(), score: 99 },
-          { uid: 'bot_logic', gender: 'male', interests: profile.interests, createdAt: Timestamp.now(), score: 99 },
-          { uid: 'bot_friend', gender: 'hidden', interests: profile.interests, createdAt: Timestamp.now(), score: 99 }
+          { uid: 'bot_empathy', gender: 'female', interests: selectedCategories, createdAt: Timestamp.now(), score: 99 },
+          { uid: 'bot_logic', gender: 'male', interests: selectedCategories, createdAt: Timestamp.now(), score: 99 },
+          { uid: 'bot_friend', gender: 'hidden', interests: selectedCategories, createdAt: Timestamp.now(), score: 99 }
         ];
         finalCandidates = [...aiBots, ...finalCandidates].slice(0, 10);
       }
@@ -362,7 +372,7 @@ export default function App() {
 
       console.log("Successfully matched users:", assignedIds);
 
-      // Step C: Save to Firestore
+      // Step E: Save to Firestore
       try {
         await Promise.all(assignedIds.map(async (receiverId: string) => {
           // 1. Save the Worry
@@ -372,14 +382,15 @@ export default function App() {
             originalContent: content,
             refinedContent: content, 
             type: 'worry',
-            category,
+            categories: selectedCategories, // Store multiple categories
+            category: selectedCategories[0], // Fallback for old code
             createdAt: serverTimestamp(),
             isRead: false
           });
 
           // 2. If it's a bot, trigger AI reply
           if (receiverId.startsWith('bot_')) {
-            const botObj = allUsers.find(u => u.uid === receiverId);
+            const botObj = finalCandidates.find(u => u.uid === receiverId);
             if (botObj) {
               try {
                 console.log(`Generating AI reply for ${receiverId}...`);
@@ -410,6 +421,7 @@ export default function App() {
         console.error("Firestore Save Error:", saveError);
         throw new Error(`사연 저장 중 오류가 발생했습니다: ${saveError.message}`);
       }
+
       console.log("All letters saved to Firestore.");
       setView('home');
     } catch (e: any) {
@@ -419,6 +431,7 @@ export default function App() {
       setIsProcessing(false);
     }
   };
+
 
   // 2. Send Reply -> Filter Check First
   const sendReply = async (content: string, worry: Letter) => {
@@ -490,6 +503,17 @@ export default function App() {
 
   if (loading) {
     return <div className="min-h-screen bg-[#FDFCF8] flex items-center justify-center"><Loader2 className="w-8 h-8 text-[#D4A373] animate-spin" /></div>;
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-[#FDFCF8] flex flex-col items-center justify-center p-6 text-center">
+        <XCircle className="w-12 h-12 text-red-500 mb-4" />
+        <h1 className="text-xl font-bold mb-2">접속 문제가 발생했습니다</h1>
+        <p className="text-[#8B8B6B] mb-6">{error}</p>
+        <button onClick={() => window.location.reload()} className="px-6 py-2 bg-[#5A5A40] text-white rounded-xl font-bold">다시 시도</button>
+      </div>
+    );
   }
 
   return (
@@ -991,24 +1015,35 @@ function OnboardingForm({ onSubmit, isProcessing, initialGender = '', initialInt
   );
 }
 
-function WriteForm({ type, isProcessing, onSubmit }: { type: 'worry'|'reply', isProcessing: boolean, onSubmit: (content: string, category?: string) => void }) {
+function WriteForm({ type, isProcessing, onSubmit }: { type: 'worry'|'reply', isProcessing: boolean, onSubmit: (content: string, categories?: string[]) => void }) {
   const [content, setContent] = useState('');
-  const [category, setCategory] = useState<string>('');
+  const [categories, setCategories] = useState<string[]>([]);
+
+  const toggleCategory = (cat: string) => {
+    if (categories.includes(cat)) {
+      setCategories(categories.filter(c => c !== cat));
+    } else {
+      setCategories([...categories, cat]);
+    }
+  };
 
   const charCount = content.replace(/\s/g, '').length;
   const isLengthValid = charCount >= 10;
-  const isValid = isLengthValid && (type === 'reply' || category !== '');
+  const isValid = isLengthValid && (type === 'reply' || categories.length > 0);
 
   return (
     <div className="space-y-6">
       {type === 'worry' && (
         <div className="space-y-3 mb-6">
-          <label className="font-bold text-sm text-[#5A5A40]">이 고민의 알맞은 주제를 골라주세요</label>
+          <label className="font-bold text-sm text-[#5A5A40]">이 고민의 알맞은 주제를 골라주세요 (중복 선택 가능)</label>
           <div className="flex flex-wrap gap-2">
             {CATEGORIES.map(cat => (
               <button 
-                key={cat} onClick={() => setCategory(cat)}
-                className={cn("px-4 py-2 rounded-full border text-xs font-bold transition-all", category === cat ? "bg-[#D4A373] text-white border-[#D4A373]" : "bg-white text-[#8B8B6B] border-[#E9EDC9]")}
+                key={cat} onClick={() => toggleCategory(cat)}
+                className={cn(
+                  "px-4 py-2 rounded-full border text-xs font-bold transition-all", 
+                  categories.includes(cat) ? "bg-[#D4A373] text-white border-[#D4A373]" : "bg-white text-[#8B8B6B] border-[#E9EDC9]"
+                )}
               >
                 {cat}
               </button>
@@ -1042,7 +1077,7 @@ function WriteForm({ type, isProcessing, onSubmit }: { type: 'worry'|'reply', is
 
       <button 
         disabled={!isValid || isProcessing}
-        onClick={() => onSubmit(content, type === 'worry' ? category : undefined)}
+        onClick={() => onSubmit(content, type === 'worry' ? categories : undefined)}
         className="w-full py-4 bg-[#5A5A40] text-white rounded-xl font-bold shadow-xl hover:bg-[#4A4A30] disabled:opacity-50 transition-all flex items-center justify-center gap-3"
       >
         {isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" /> 전송 중...</> : <><Send className="w-5 h-5" /> 송출하기</>}
