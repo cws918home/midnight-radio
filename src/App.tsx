@@ -24,7 +24,7 @@ import {
 import { auth, db } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, Trash2
+  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, Trash2, FileText, Bell
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { processWorry, processReply, generateAIReply, processComment } from './services/geminiService';
@@ -74,6 +74,7 @@ export default function App() {
   const [feedWorries, setFeedWorries] = useState<Letter[]>([]);
   const [inboxReplies, setInboxReplies] = useState<Letter[]>([]);
   const [myGivenReplies, setMyGivenReplies] = useState<Letter[]>([]);
+  const [myWorries, setMyWorries] = useState<Letter[]>([]);
   
   const [selectedWorry, setSelectedWorry] = useState<Letter | null>(null);
   const [selectedReply, setSelectedReply] = useState<Letter | null>(null);
@@ -243,7 +244,7 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  // Outbox (My Given Replies) Listener
+  // Outbox (My Given Replies) Listener + Comment Notification
   useEffect(() => {
     if (!user) return;
 
@@ -255,9 +256,36 @@ export default function App() {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (!initialLoadRef.current) {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'modified') {
+            const data = change.doc.data() as Letter;
+            if (data.publisherComment && 'Notification' in window && Notification.permission === 'granted') {
+              new Notification(`💌 따뜻한 코멘트 도착`, {
+                body: `내 답장에 상대방이 감사 인사를 남겼어요: "${data.publisherComment}"`,
+              });
+            }
+          }
+        });
+      }
       setMyGivenReplies(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter)));
     });
 
+    return () => unsubscribe();
+  }, [user]);
+
+  // My Sent Worries Listener
+  useEffect(() => {
+    if (!user) return;
+    const q = query(
+      collection(db, 'letters'),
+      where('type', '==', 'worry'),
+      where('senderId', '==', user.uid),
+      orderBy('createdAt', 'desc')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setMyWorries(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter)));
+    });
     return () => unsubscribe();
   }, [user]);
 
@@ -372,9 +400,11 @@ export default function App() {
       console.log("Assigned Recipients:", assignedIds);
 
       // Step 3: Save to Firestore
+      // Use a simpler map without waiting for individual AI generations inside Promise.all
       await Promise.all(assignedCandidates.map(async (candidate) => {
         const receiverId = candidate.uid;
-        // 1. Save the Worry
+        
+        // 1. Save the Worry (This is the only part we MUST wait for)
         const worryRef = await addDoc(collection(db, 'letters'), {
           senderId: user.uid,
           receiverId, 
@@ -387,33 +417,38 @@ export default function App() {
           isRead: false
         });
 
-        // 2. If it's a bot, trigger AI reply immediately
+        // 2. Trigger AI reply in the BACKGROUND (Do NOT use 'await' here)
         if (receiverId.startsWith('bot_')) {
-          try {
-            console.log(`Generating AI reply for ${receiverId}...`);
-            const aiResponse = await generateAIReply(content, candidate);
-            const replyText = aiResponse.content || "당신의 고민을 잘 읽었어요. 마음이 따뜻해지는 밤 되시길 바랄게요.";
+          // Launch as an independent async task
+          (async () => {
+            try {
+              console.log(`[Background] Generating AI reply for ${receiverId}...`);
+              const aiResponse = await generateAIReply(content, candidate);
+              const replyText = aiResponse.content || "당신의 고민을 잘 읽었어요. 마음이 따뜻해지는 밤 되시길 바랄게요.";
 
-            await addDoc(collection(db, 'letters'), {
-              senderId: receiverId, 
-              receiverId: user.uid,
-              originalContent: replyText,
-              refinedContent: replyText,
-              type: 'reply',
-              replyTo: worryRef.id,
-              replyToContent: content,
-              createdAt: serverTimestamp(),
-              isRead: false,
-              feedback: null
-            });
-          } catch (botErr) {
-            console.error(`AI bot reply failed for ${receiverId}:`, botErr);
-          }
+              await addDoc(collection(db, 'letters'), {
+                senderId: receiverId, 
+                receiverId: user.uid,
+                originalContent: replyText,
+                refinedContent: replyText,
+                type: 'reply',
+                replyTo: worryRef.id,
+                replyToContent: content,
+                createdAt: serverTimestamp(),
+                isRead: false,
+                feedback: null
+              });
+              console.log(`[Background] AI reply from ${receiverId} saved.`);
+            } catch (botErr) {
+              console.error(`[Background] AI bot reply failed for ${receiverId}:`, botErr);
+            }
+          })(); // IIFE to run in background
         }
       }));
 
-      console.log("All letters published.");
+      console.log("Worry submission successful.");
       setView('home');
+      window.scrollTo(0, 0);
     } catch (e: any) {
       console.error("Publication Error:", e);
       setFilterAlert(`전송 실패: ${e.message || "알 수 없는 오류"}`);
@@ -541,19 +576,19 @@ export default function App() {
               <Radio className="w-5 h-5" /> 미드나잇 라디오
             </button>
             <div className="flex items-center gap-3">
-              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[#E9EDC9]/50 rounded-full text-xs font-bold text-[#A3B18A]">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#E9EDC9]/50 rounded-full text-xs font-bold text-[#A3B18A]">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#A3B18A] opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-[#A3B18A]"></span>
                 </span>
-                접속자 {activeUsersCount}명
+                {activeUsersCount}명
               </div>
               {notificationPermission === 'default' && (
                 <button
                   onClick={requestNotificationPermission}
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[#E07A5F] text-white rounded-full text-xs font-medium shadow-sm hover:bg-[#D46A4F] transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#E07A5F] text-white rounded-full text-xs font-medium shadow-sm hover:bg-[#D46A4F] transition-colors"
                 >
-                  <Signal className="w-3 h-3" /> 알림 켜기
+                  <Bell className="w-3 h-3" /> 알림 켜기
                 </button>
               )}
               <button 
@@ -721,7 +756,8 @@ export default function App() {
               <Tabs 
                 tabs={[
                   { id: 'received', label: `받은 답장 (${inboxReplies.length})` },
-                  { id: 'given', label: `내가 한 위로 (${myGivenReplies.length})` }
+                  { id: 'given', label: `내가 한 위로 (${myGivenReplies.length})` },
+                  { id: 'sent', label: `내 고민 내역 (${myWorries.length})` }
                 ]}
                 render={(activeTab) => (
                   <div className="mt-6">
@@ -754,7 +790,9 @@ export default function App() {
                               </button>
                               <div className="flex items-center gap-2 mb-3">
                                 <Headphones className={cn("w-4 h-4", reply.isRead ? "text-[#A3B18A]" : "text-[#E07A5F]")} />
-                                <span className="text-xs font-semibold text-[#8B8B6B]">누군가의 따뜻한 답장</span>
+                                <span className="text-xs font-semibold text-[#8B8B6B]">
+                                  {reply.senderId.startsWith('bot_') ? 'AI 위로 메신저' : '누군가의 따뜻한 답장'}
+                                </span>
                                 {!reply.isRead && <span className="ml-auto w-2 h-2 bg-[#E07A5F] rounded-full" />}
                               </div>
                               <p className="text-[#5A5A40] font-medium line-clamp-2 leading-relaxed">
@@ -806,6 +844,40 @@ export default function App() {
                                 </div>
                               )}
                             </button>
+                          ))}
+                        </div>
+                      )
+                    )}
+
+                    {activeTab === 'sent' && (
+                      myWorries.length === 0 ? (
+                        <div className="text-center py-16 bg-white/50 rounded-3xl border border-dashed border-[#E9EDC9]">
+                          <FileText className="w-12 h-12 text-[#E9EDC9] mx-auto mb-3" />
+                          <p className="text-[#8B8B6B]">아직 송출한 고민이 없어요.</p>
+                        </div>
+                      ) : (
+                        <div className="grid gap-4">
+                          {myWorries.map(worry => (
+                            <div key={worry.id} className="w-full text-left p-6 bg-white rounded-2xl border border-[#E9EDC9] relative group">
+                              <button 
+                                onClick={(e) => deleteLetter(e, worry.id)}
+                                className="absolute top-4 right-4 p-2 text-[#8B8B6B] opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                              <div className="flex items-center gap-2 mb-3">
+                                <Signal className="w-4 h-4 text-[#D4A373]" />
+                                <span className="text-xs font-semibold text-[#8B8B6B]">
+                                  수신인: {worry.receiverId === 'public' ? '모든 이용자' : (worry.receiverId.startsWith('bot_') ? 'AI 답변자' : '익명 이용자')}
+                                </span>
+                                <span className="ml-auto text-[10px] text-[#E9EDC9] font-bold bg-[#FAEDCD] px-2 py-0.5 rounded-full">
+                                  {(worry.categories || [worry.category]).join(', ')}
+                                </span>
+                              </div>
+                              <p className="text-[#5A5A40] font-medium line-clamp-2 leading-relaxed italic">
+                                "{worry.originalContent}"
+                              </p>
+                            </div>
                           ))}
                         </div>
                       )
