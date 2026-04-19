@@ -274,13 +274,13 @@ export default function App() {
       const userRef = doc(db, 'users', user.uid);
       const now = Timestamp.now();
       
-      const newProfileData: UserProfile = {
+      const newProfileData: any = {
         uid: user.uid,
         gender,
         interests,
         helpedCount: 0,
         createdAt: now,
-        lastActive: now
+        lastActive: serverTimestamp() // Set to server timestamp for matching
       };
       
       // 1. Save to Firestore
@@ -288,7 +288,7 @@ export default function App() {
       console.log("Profile saved successfully.");
 
       // 2. IMPORTANT: Update local state FIRST
-      setProfile(newProfileData);
+      setProfile({ ...newProfileData, lastActive: now } as UserProfile);
       
       // 3. Forcefully switch view
       setView('home');
@@ -316,11 +316,8 @@ export default function App() {
     try {
       console.log("Starting worry publication process...");
 
-      // Step 1: LLM Content Filter ONLY
-      // Using processReply service because it's a generic filter (Status: approved/rejected)
-      console.log("Checking content safety via LLM...");
+      // Step 1: LLM Content Filter
       const filterResult = await processReply(content);
-      
       if (filterResult.status === 'rejected') {
         setFilterAlert(filterResult.reason || "부적절한 표현이 감지되었습니다.");
         setIsProcessing(false);
@@ -328,13 +325,21 @@ export default function App() {
       }
 
       // Step 2: Local Matching (Code-based)
-      // A. Fetch potential human candidates
-      const usersSnap = await getDocs(query(collection(db, 'users'), limit(100)));
+      // A. Fetch ONLY ACTIVE human candidates (Active within last 24 hours)
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const usersSnap = await getDocs(query(
+        collection(db, 'users'), 
+        where('lastActive', '>=', Timestamp.fromDate(oneDayAgo)),
+        limit(100)
+      ));
+      
       const allHumanUsers = usersSnap.docs
         .map(d => d.data() as UserProfile)
         .filter(u => u.uid !== user.uid);
 
-      // B. Calculate Intersection Score for each human
+      console.log(`Matching from ${allHumanUsers.length} active users.`);
+
+      // B. Calculate Intersection Score
       const scoredHumans = allHumanUsers.map(u => {
         const userInterests = u.interests || [];
         const intersection = userInterests.filter(i => (selectedCategories || []).includes(i));
