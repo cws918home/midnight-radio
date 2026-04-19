@@ -283,25 +283,37 @@ export default function App() {
     if (!user || !profile) return;
     setIsProcessing(true);
     try {
-      // Fetch users
-      const usersSnap = await getDocs(query(collection(db, 'users')));
-      let allUsers = usersSnap.docs.map(d => d.data() as UserProfile).filter(u => u.uid !== user.uid);
+      console.log("Starting worry publication process...");
+      // Fetch users - limit to active ones to avoid permission/payload issues
+      const twoMinsAgo = Timestamp.fromDate(new Date(Date.now() - 2 * 60 * 1000));
+      const usersSnap = await getDocs(query(
+        collection(db, 'users'), 
+        where('lastActive', '>=', twoMinsAgo),
+        limit(20)
+      ));
+      
+      let allUsers = usersSnap.docs
+        .map(d => d.data() as UserProfile)
+        .filter(u => u.uid !== user.uid);
 
-      // Fetch letters to build candidate history
-      const lettersSnap = await getDocs(query(collection(db, 'letters')));
-      const allLetters = lettersSnap.docs.map(d => d.data() as Letter);
+      // Fallback: if no active users, get any 10 users
+      if (allUsers.length === 0) {
+        const fallbackSnap = await getDocs(query(collection(db, 'users'), limit(10)));
+        allUsers = fallbackSnap.docs
+          .map(d => d.data() as UserProfile)
+          .filter(u => u.uid !== user.uid);
+      }
 
-      // Build decorated candidates
-      const decoratedCandidates = allUsers.map(u => {
-        const userLetters = allLetters.filter(l => l.senderId === u.uid);
-        return {
-          uid: u.uid,
-          gender: u.gender,
-          interests: u.interests,
-          pastWorries: userLetters.filter(l => l.type === 'worry').map(l => l.originalContent).slice(0, 3), // limit 3 to save context
-          pastReplies: userLetters.filter(l => l.type === 'reply').map(l => l.originalContent).slice(0, 3),
-        };
-      });
+      console.log(`Found ${allUsers.length} potential candidates.`);
+
+      // Simplified candidate info to avoid security/size issues
+      const decoratedCandidates = allUsers.map(u => ({
+        uid: u.uid,
+        gender: u.gender,
+        interests: u.interests,
+        pastWorries: [], // Skipping history for now to ensure stability
+        pastReplies: [],
+      }));
 
       const senderInfo = {
         gender: profile.gender,
@@ -309,6 +321,7 @@ export default function App() {
       };
 
       // Pass content + candidate list to the LLM backend for matching
+      console.log("Calling LLM backend...");
       const result = await processWorry(content, decoratedCandidates, senderInfo);
 
       if (result.status === 'rejected') {
@@ -317,7 +330,7 @@ export default function App() {
         return;
       }
 
-      // If approved, parse the assigned users (exactly 3 typically, enforced by prompt)
+      // If approved, parse the assigned users
       const assignedIds = result.assignedUids && result.assignedUids.length > 0 
         ? result.assignedUids 
         : [];
@@ -328,11 +341,13 @@ export default function App() {
         return;
       }
 
+      console.log("Successfully matched users:", assignedIds);
+
       // Create a doc for EACH matched user
       await Promise.all(assignedIds.map(async (receiverId: string) => {
         await addDoc(collection(db, 'letters'), {
           senderId: user.uid,
-          receiverId, // Specific user routing
+          receiverId, 
           originalContent: content,
           refinedContent: content, 
           type: 'worry',
@@ -342,10 +357,11 @@ export default function App() {
         });
       }));
 
+      console.log("All letters saved to Firestore.");
       setView('home');
-    } catch (e) {
-      console.error(e);
-      setFilterAlert("전송 실패");
+    } catch (e: any) {
+      console.error("Publication Error Details:", e);
+      setFilterAlert(`전송 실패: ${e.message || "알 수 없는 오류"}`);
     } finally {
       setIsProcessing(false);
     }
