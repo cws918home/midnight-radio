@@ -297,7 +297,7 @@ export default function App() {
 
   const [filterAlert, setFilterAlert] = useState<string | null>(null);
 
-  // 1. Publish Worry -> Backend LLM Routing
+  // 1. Publish Worry -> Filter Check then Local Matching
   const publishWorry = async (content: string, selectedCategories: string[]) => {
     if (!user || !profile) {
       setFilterAlert("로그인 정보가 없습니다.");
@@ -307,127 +307,101 @@ export default function App() {
     try {
       console.log("Starting worry publication process...");
 
-      // Step A: Fetch potential candidates
-      let allUsers: UserProfile[] = [];
-      const usersSnap = await getDocs(query(collection(db, 'users'), limit(50)));
-      allUsers = usersSnap.docs
+      // Step 1: LLM Content Filter ONLY
+      // Using processReply service because it's a generic filter (Status: approved/rejected)
+      console.log("Checking content safety via LLM...");
+      const filterResult = await processReply(content);
+      
+      if (filterResult.status === 'rejected') {
+        setFilterAlert(filterResult.reason || "부적절한 표현이 감지되었습니다.");
+        setIsProcessing(false);
+        return;
+      }
+
+      // Step 2: Local Matching (Code-based)
+      // A. Fetch potential human candidates
+      const usersSnap = await getDocs(query(collection(db, 'users'), limit(100)));
+      const allHumanUsers = usersSnap.docs
         .map(d => d.data() as UserProfile)
         .filter(u => u.uid !== user.uid);
 
-      // Step B: Calculate Intersection Score (Worry Categories vs Candidate Interests)
-      const scoredCandidates = allUsers.map(u => {
-        const userInterests = u.interests || []; // Safety check for missing interests
+      // B. Calculate Intersection Score for each human
+      const scoredHumans = allHumanUsers.map(u => {
+        const userInterests = u.interests || [];
         const intersection = userInterests.filter(i => (selectedCategories || []).includes(i));
-        return {
-          ...u,
-          score: intersection.length
-        };
+        return { ...u, score: intersection.length };
       });
 
-      // Sort by score (descending)
-      scoredCandidates.sort((a, b) => b.score - a.score);
+      // C. Get humans with at least one matching interest (score > 0), sorted by score
+      const matchingHumans = scoredHumans
+        .filter(h => h.score > 0)
+        .sort((a, b) => b.score - a.score);
 
-      // Take top human candidates
-      let finalCandidates = scoredCandidates.slice(0, 10);
-
-      // Step C: If no good human matches (score 0), inject tailored AI bots
-      if (finalCandidates.filter(c => c.score > 0).length < 2) {
-        console.log("Not enough matching human users. Injecting tailored AI bots...");
+      // D. Final Assigned IDs Logic
+      // - First, take matching humans (up to 3)
+      // - If fewer than 3, fill the rest with AI bots
+      let assignedCandidates: (UserProfile | any)[] = matchingHumans.slice(0, 3);
+      
+      if (assignedCandidates.length < 3) {
+        console.log(`Only found ${assignedCandidates.length} matching humans. Adding AI bots...`);
+        const needed = 3 - assignedCandidates.length;
         const aiBots = [
-          { uid: 'bot_empathy', gender: 'female', interests: selectedCategories || [], createdAt: Timestamp.now(), score: 99 },
-          { uid: 'bot_logic', gender: 'male', interests: selectedCategories || [], createdAt: Timestamp.now(), score: 99 },
-          { uid: 'bot_friend', gender: 'hidden', interests: selectedCategories || [], createdAt: Timestamp.now(), score: 99 }
+          { uid: 'bot_empathy', gender: 'female', interests: selectedCategories || [] },
+          { uid: 'bot_logic', gender: 'male', interests: selectedCategories || [] },
+          { uid: 'bot_friend', gender: 'hidden', interests: selectedCategories || [] }
         ];
-        finalCandidates = [...aiBots, ...finalCandidates].slice(0, 10);
+        // Combine and ensure we have 3 unique ones
+        assignedCandidates = [...assignedCandidates, ...aiBots.slice(0, needed)];
       }
 
-      console.log(`Matching process: Found ${finalCandidates.length} potential candidates.`);
+      const assignedIds = assignedCandidates.map(c => c.uid);
+      console.log("Assigned Recipients:", assignedIds);
 
-      const decoratedCandidates = finalCandidates.map(u => ({
-        uid: u.uid,
-        gender: u.gender,
-        interests: u.interests,
+      // Step 3: Save to Firestore
+      await Promise.all(assignedCandidates.map(async (candidate) => {
+        const receiverId = candidate.uid;
+        // 1. Save the Worry
+        const worryRef = await addDoc(collection(db, 'letters'), {
+          senderId: user.uid,
+          receiverId, 
+          originalContent: content,
+          refinedContent: content, 
+          type: 'worry',
+          categories: selectedCategories,
+          category: selectedCategories[0],
+          createdAt: serverTimestamp(),
+          isRead: false
+        });
+
+        // 2. If it's a bot, trigger AI reply immediately
+        if (receiverId.startsWith('bot_')) {
+          try {
+            console.log(`Generating AI reply for ${receiverId}...`);
+            const aiResponse = await generateAIReply(content, candidate);
+            const replyText = aiResponse.content || "당신의 고민을 잘 읽었어요. 마음이 따뜻해지는 밤 되시길 바랄게요.";
+
+            await addDoc(collection(db, 'letters'), {
+              senderId: receiverId, 
+              receiverId: user.uid,
+              originalContent: replyText,
+              refinedContent: replyText,
+              type: 'reply',
+              replyTo: worryRef.id,
+              replyToContent: content,
+              createdAt: serverTimestamp(),
+              isRead: false,
+              feedback: null
+            });
+          } catch (botErr) {
+            console.error(`AI bot reply failed for ${receiverId}:`, botErr);
+          }
+        }
       }));
 
-      const senderInfo = {
-        gender: profile.gender,
-        interests: profile.interests
-      };
-
-      // Step D: Call Backend LLM for final 3 assignment
-      console.log("Calling LLM backend for matching...");
-      const result = await processWorry(content, decoratedCandidates, senderInfo);
-
-      if (result.status === 'rejected') {
-        setFilterAlert("부적절한 표현이 감지되었습니다.");
-        setIsProcessing(false);
-        return;
-      }
-
-      const assignedIds = (result.assignedUids || []).filter((id: string) => id !== user.uid);
-
-      if (assignedIds.length === 0) {
-        setFilterAlert("적절한 답변자를 매칭하지 못했습니다. 내용을 조금 더 구체적으로 적어보시겠어요?");
-        setIsProcessing(false);
-        return;
-      }
-
-      console.log("Successfully matched users:", assignedIds);
-
-      // Step E: Save to Firestore
-      try {
-        await Promise.all(assignedIds.map(async (receiverId: string) => {
-          // 1. Save the Worry
-          const worryRef = await addDoc(collection(db, 'letters'), {
-            senderId: user.uid,
-            receiverId, 
-            originalContent: content,
-            refinedContent: content, 
-            type: 'worry',
-            categories: selectedCategories, // Store multiple categories
-            category: selectedCategories[0], // Fallback for old code
-            createdAt: serverTimestamp(),
-            isRead: false
-          });
-
-          // 2. If it's a bot, trigger AI reply
-          if (receiverId.startsWith('bot_')) {
-            const botObj = finalCandidates.find(u => u.uid === receiverId);
-            if (botObj) {
-              try {
-                console.log(`Generating AI reply for ${receiverId}...`);
-                const aiResponse = await generateAIReply(content, botObj);
-                const replyText = aiResponse.content || "당신의 고민을 잘 읽었어요. 마음이 따뜻해지는 밤 되시길 바랄게요.";
-
-                // Save AI Reply back to user
-                await addDoc(collection(db, 'letters'), {
-                  senderId: receiverId, 
-                  receiverId: user.uid,
-                  originalContent: replyText,
-                  refinedContent: replyText,
-                  type: 'reply',
-                  replyTo: worryRef.id,
-                  replyToContent: content,
-                  createdAt: serverTimestamp(),
-                  isRead: false,
-                  feedback: null
-                });
-                console.log(`AI reply from ${receiverId} saved.`);
-              } catch (botErr) {
-                console.error(`Individual bot reply failed for ${receiverId}:`, botErr);
-              }
-            }
-          }
-        }));
-      } catch (saveError: any) {
-        console.error("Firestore Save Error:", saveError);
-        throw new Error(`사연 저장 중 오류가 발생했습니다: ${saveError.message}`);
-      }
-
-      console.log("All letters saved to Firestore.");
+      console.log("All letters published.");
       setView('home');
     } catch (e: any) {
-      console.error("Publication Full Error Details:", e);
+      console.error("Publication Error:", e);
       setFilterAlert(`전송 실패: ${e.message || "알 수 없는 오류"}`);
     } finally {
       setIsProcessing(false);

@@ -82,10 +82,11 @@ async function startServer() {
       const systemInstruction = `You are an AI moderator and routing engine for a Korean anonymous worry-sharing app.
 1. Check for inappropriate content. If bad, return: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
 2. If appropriate, select EXACTLY 3 best-matching users from the 'Candidate List'.
-   - MATCHING RULE: Prioritize candidates who have the LARGEST INTERSECTION (overlap) of interests with the sender. 
-   - SECONDARY RULE: Consider gender and the context of the worry.
-   - FALLBACK: If human candidates are poor matches, the list will include high-match AI bots (uid starts with 'bot_'). Prefer these if they match interests better than available humans.
-   - YOU MUST return exactly 3 UIDs in order of match quality.
+   - MATCHING RULE: Prioritize candidates who share the most interests with the sender.
+   - MANDATORY: YOU MUST RETURN EXACTLY 3 UIDs. DO NOT RETURN AN EMPTY LIST.
+   - If there are fewer than 3 candidates, return all of them.
+   - If match quality is low, pick the best available ones anyway. 
+   - AI bots (uids starting with 'bot_') are perfect matches if they share interests.
 3. RETURN JSON: { "status": "approved", "assignedUids": ["uid1", "uid2", "uid3"] }
 
 Sender Info (JSON):
