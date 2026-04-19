@@ -95,20 +95,18 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
-        // Request Notification permission softly
-        if (notificationPermission === 'default') {
-          setTimeout(() => requestNotificationPermission(), 2000);
-        }
-
+        
         const userRef = doc(db, 'users', currentUser.uid);
         const userSnap = await getDoc(userRef);
         
         if (userSnap.exists()) {
           const userData = userSnap.data() as UserProfile;
           setProfile(userData);
-          setView('home');
+          // Only auto-redirect to home if we are not currently in the onboarding process
+          setView(prev => (prev === 'onboarding' ? 'home' : prev));
         } else {
           setProfile(null);
+          // If no profile, stay on onboarding
           setView('onboarding');
         }
         setLoading(false);
@@ -244,40 +242,43 @@ export default function App() {
   }, [user]);
 
   const handleOnboardingSubmit = async (gender: string, interests: string[]) => {
-    if (!user) return;
+    if (!user) {
+      alert("로그인 정보가 없습니다.");
+      return;
+    }
+    
     setIsProcessing(true);
+    console.log("Submitting onboarding data...");
+
     try {
-      console.log("Submitting onboarding data...");
       const userRef = doc(db, 'users', user.uid);
+      const now = Timestamp.now();
       
-      const newProfileData = {
+      const newProfileData: UserProfile = {
         uid: user.uid,
         gender,
         interests,
-        helpedCount: profile?.helpedCount || 0,
-        createdAt: profile?.createdAt || serverTimestamp(),
-        lastActive: serverTimestamp()
+        helpedCount: 0,
+        createdAt: now,
+        lastActive: now
       };
       
+      // 1. Save to Firestore
       await setDoc(userRef, newProfileData, { merge: true });
+      console.log("Profile saved successfully.");
+
+      // 2. IMPORTANT: Update local state FIRST
+      setProfile(newProfileData);
       
-      // Update local state and then wait a bit before switching view
-      const updatedProfile = { 
-        ...newProfileData, 
-        createdAt: profile?.createdAt || Timestamp.now() 
-      } as UserProfile;
+      // 3. Forcefully switch view
+      setView('home');
       
-      setProfile(updatedProfile);
-      
-      // Force view change with a small delay to ensure Firestore write is propagated
-      setTimeout(() => {
-        setView('home');
-        window.scrollTo(0, 0);
-      }, 200);
+      // 4. Scroll to top
+      window.scrollTo(0, 0);
 
     } catch (e: any) {
       console.error("Onboarding Submit Error:", e);
-      alert(`설정 저장에 실패했습니다: ${e.message}`);
+      alert(`데이터 저장에 실패했습니다. (사유: ${e.message})`);
     } finally {
       setIsProcessing(false);
     }
