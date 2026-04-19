@@ -342,25 +342,26 @@ export default function App() {
     }
     setIsProcessing(true);
     try {
-      console.log("Starting worry publication process...");
+      console.log("Starting worry publication process (Optimized)...");
 
-      // Step 1: LLM Content Filter
-      const filterResult = await processReply(content);
+      // Step 1 & 2 in PARALLEL: LLM Filter + Fetch Active Users
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      
+      const [filterResult, usersSnap] = await Promise.all([
+        processReply(content), // LLM Check
+        getDocs(query(         // DB Fetch
+          collection(db, 'users'), 
+          where('lastActive', '>=', Timestamp.fromDate(oneDayAgo)),
+          limit(50)
+        ))
+      ]);
+
       if (filterResult.status === 'rejected') {
         setFilterAlert(filterResult.reason || "부적절한 표현이 감지되었습니다.");
         setIsProcessing(false);
         return;
       }
 
-      // Step 2: Local Matching (Code-based)
-      // A. Fetch ONLY ACTIVE human candidates (Active within last 24 hours)
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const usersSnap = await getDocs(query(
-        collection(db, 'users'), 
-        where('lastActive', '>=', Timestamp.fromDate(oneDayAgo)),
-        limit(100)
-      ));
-      
       const allHumanUsers = usersSnap.docs
         .map(d => d.data() as UserProfile)
         .filter(u => u.uid !== user.uid);
@@ -576,21 +577,13 @@ export default function App() {
               <Radio className="w-5 h-5" /> 미드나잇 라디오
             </button>
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#E9EDC9]/50 rounded-full text-xs font-bold text-[#A3B18A]">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#E9EDC9]/50 rounded-full text-[10px] sm:text-xs font-bold text-[#A3B18A]">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#A3B18A] opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-[#A3B18A]"></span>
                 </span>
                 {activeUsersCount}명
               </div>
-              {notificationPermission === 'default' && (
-                <button
-                  onClick={requestNotificationPermission}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#E07A5F] text-white rounded-full text-xs font-medium shadow-sm hover:bg-[#D46A4F] transition-colors"
-                >
-                  <Bell className="w-3 h-3" /> 알림 켜기
-                </button>
-              )}
               <button 
                 onClick={() => setView('settings')}
                 className="relative p-2 hover:bg-[#FAEDCD] rounded-full transition-colors text-[#8B8B6B] hover:text-[#5A5A40]"
@@ -648,6 +641,38 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="bg-white p-6 rounded-2xl border border-[#E9EDC9] space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-[#FAEDCD] rounded-full flex items-center justify-center text-[#D4A373]">
+                      <Bell className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-[#5A5A40]">푸시 알림 설정</h3>
+                      <p className="text-xs text-[#8B8B6B]">새로운 사연이나 답장 알림을 받습니다.</p>
+                    </div>
+                  </div>
+                  <div className={cn(
+                    "px-3 py-1 rounded-full text-[10px] font-bold",
+                    notificationPermission === 'granted' ? "bg-green-50 text-green-600" : (notificationPermission === 'denied' ? "bg-red-50 text-red-600" : "bg-gray-100 text-gray-500")
+                  )}>
+                    {notificationPermission === 'granted' ? '활성화됨' : (notificationPermission === 'denied' ? '차단됨' : '설정 필요')}
+                  </div>
+                </div>
+
+                {notificationPermission !== 'granted' && (
+                  <button 
+                    onClick={requestNotificationPermission}
+                    className="w-full py-3 bg-[#E07A5F] text-white rounded-xl text-sm font-bold shadow-sm hover:bg-[#D46A4F] transition-all flex items-center justify-center gap-2"
+                  >
+                    <Signal className="w-4 h-4" /> 알림 권한 허용하기
+                  </button>
+                )}
+                {notificationPermission === 'denied' && (
+                  <p className="text-[10px] text-[#E07A5F] text-center">브라우저 설정에서 알림 권한을 직접 허용해 주세요.</p>
+                )}
+              </div>
+
               <div className="text-left space-y-2 mb-10">
                 <h1 className="text-3xl font-serif font-bold text-[#5A5A40]">내 주파수 설정</h1>
                 <p className="text-[#8B8B6B]">나의 성별과 가장 관심있는 고민 주제를 변경할 수 있어요.</p>
@@ -694,12 +719,18 @@ export default function App() {
                       <p className="text-[#5A5A40] leading-relaxed mb-6 whitespace-pre-wrap font-medium">
                         "{worry.refinedContent}"
                       </p>
-                      <button 
-                        onClick={() => { setSelectedWorry(worry); setView('write_reply'); }}
-                        className="w-full py-3 bg-[#FDFCF8] text-[#8B8B6B] font-medium border border-[#E9EDC9] rounded-xl hover:bg-[#FAEDCD] hover:text-[#5A5A40] transition-colors flex items-center justify-center gap-2"
-                      >
-                        <MessageSquare className="w-4 h-4" /> 다정하게 답장해주기
-                      </button>
+                      {myGivenReplies.some(r => r.replyTo === worry.id) ? (
+                        <div className="w-full py-3 bg-[#E9EDC9]/30 text-[#A3B18A] font-bold border border-[#E9EDC9] rounded-xl flex items-center justify-center gap-2">
+                          <CheckCircle2 className="w-4 h-4" /> 답장 완료!
+                        </div>
+                      ) : (
+                        <button 
+                          onClick={() => { setSelectedWorry(worry); setView('write_reply'); }}
+                          className="w-full py-3 bg-[#FDFCF8] text-[#8B8B6B] font-medium border border-[#E9EDC9] rounded-xl hover:bg-[#FAEDCD] hover:text-[#5A5A40] transition-colors flex items-center justify-center gap-2"
+                        >
+                          <MessageSquare className="w-4 h-4" /> 다정하게 답장해주기
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
