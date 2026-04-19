@@ -178,11 +178,14 @@ export default function App() {
         
         // Final Filter Logic:
         // 1. Show if receiverId is 'public' (Admin/Global)
-        // 2. OR Show if receiverId is MY UID AND it matches MY INTERESTS
+        // 2. OR Show if receiverId is MY UID AND it matches any of MY INTERESTS
         const filtered = allWorries.filter(w => {
           if (w.receiverId === 'public') return true;
           if (w.receiverId === profile.uid) {
-            return profile.interests.includes(w.category || '');
+            // Check intersection between worry categories and user interests
+            const worryCats = w.categories || [w.category || '기타'];
+            const userInterests = profile.interests || [];
+            return worryCats.some(cat => userInterests.includes(cat));
           }
           return false;
         });
@@ -193,8 +196,6 @@ export default function App() {
       }
     }, (err) => {
       console.error("Feed Listener Error:", err);
-      // If still failing, it might be an index issue. 
-      // Try even simpler query as absolute fallback
     });
 
     return () => unsubscribe();
