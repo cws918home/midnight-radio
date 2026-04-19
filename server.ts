@@ -179,7 +179,16 @@ Return JSON: { "content": "Your reply here" }`;
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    // Serve static files (manifest, icons, etc.)
+    app.use(express.static(distPath, {
+      setHeaders: (res, path) => {
+        if (path.endsWith('.js')) {
+          res.setHeader('Service-Worker-Allowed', '/');
+        }
+      }
+    }));
+    
+    // Always serve index.html for SPA routing
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

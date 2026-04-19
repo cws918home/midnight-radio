@@ -25,7 +25,7 @@ export default defineConfig(({mode}) => {
           display: 'standalone',
           icons: [
             {
-              src: 'pwa-144x144.png',
+              src: 'pwa-192x192.png',
               sizes: '144x144',
               type: 'image/png'
             },
