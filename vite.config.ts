@@ -31,13 +31,29 @@ export default defineConfig(({mode}) => {
               src: 'pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
-              purpose: 'any maskable'
+              purpose: 'any'
             },
             {
               src: 'pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
-              purpose: 'any maskable'
+              purpose: 'maskable'
+            }
+          ],
+          screenshots: [
+            {
+              src: 'pwa-512x512.png', // 실제로는 앱 캡처본이 좋지만, 우선 아이콘으로 대체
+              sizes: '512x512',
+              type: 'image/png',
+              form_factor: 'narrow',
+              label: '미드나잇 라디오 모바일'
+            },
+            {
+              src: 'pwa-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              form_factor: 'wide',
+              label: '미드나잇 라디오 데스크톱'
             }
           ]
         }
