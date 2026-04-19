@@ -7,20 +7,12 @@ service cloud.firestore {
     }
     
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() && request.auth.uid == userId;
+      allow read, write: if isAuthenticated();
     }
 
     match /letters/{letterId} {
-      // 고민(worry)은 누구나, 답장(reply)은 관련자만
-      allow read: if isAuthenticated() && (
-        resource.data.type == 'worry' || 
-        request.auth.uid == resource.data.senderId || 
-        request.auth.uid == resource.data.receiverId
-      );
-      
-      allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
+      // 테스트를 위해 모든 로그인 사용자의 읽기/쓰기/삭제를 허용합니다.
+      allow read, write, delete: if isAuthenticated();
     }
     
     match /test/connection {

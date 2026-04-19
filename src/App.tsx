@@ -164,38 +164,47 @@ export default function App() {
   useEffect(() => {
     if (!profile) return;
 
-    // Simplify query: just get worries, filter the rest on client to avoid permission/index errors
+    // Super simple query to avoid ANY index requirements
     const q = query(
       collection(db, 'letters'),
       where('type', '==', 'worry'),
-      orderBy('createdAt', 'desc'),
-      limit(100)
+      limit(200)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       try {
+        console.log(`Received snapshot with ${snapshot.size} worries.`);
         const allWorries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter));
         
-        // Final Filter Logic:
-        // 1. Show if receiverId is 'public' (Admin/Global)
-        // 2. OR Show if receiverId is MY UID AND it matches any of MY INTERESTS
-        const filtered = allWorries.filter(w => {
+        // Final Filter Logic (Applied on the client side):
+        // 1. Show if receiverId is 'public' (Admin/Global) -> ALWAYS SHOW
+        // 2. Show if receiverId is MY UID AND it matches any of MY INTERESTS
+        let filtered = allWorries.filter(w => {
           if (w.receiverId === 'public') return true;
+          
           if (w.receiverId === profile.uid) {
-            // Check intersection between worry categories and user interests
-            const worryCats = w.categories || (w.category ? [w.category] : []);
+            const worryCats = (w.categories || (w.category ? [w.category] : [])) as string[];
             const userInterests = profile.interests || [];
-            return worryCats.some(cat => userInterests.includes(cat));
+            const hasOverlap = worryCats.some(cat => userInterests.includes(cat));
+            return hasOverlap;
           }
           return false;
         });
 
+        // Sort on client side by createdAt (newest first)
+        filtered.sort((a, b) => {
+          const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+          const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+          return timeB - timeA;
+        });
+
+        console.log(`Feed updated: ${filtered.length} worries visible.`);
         setFeedWorries(filtered);
       } catch (err) {
         console.error("Error processing worries:", err);
       }
     }, (err) => {
-      console.error("Feed Listener Error:", err);
+      console.error("Feed Listener CRITICAL Error:", err);
     });
 
     return () => unsubscribe();
