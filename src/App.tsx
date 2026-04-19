@@ -280,38 +280,42 @@ export default function App() {
 
   // 1. Publish Worry -> Backend LLM Routing
   const publishWorry = async (content: string, category: string) => {
-    if (!user || !profile) return;
+    if (!user || !profile) {
+      setFilterAlert("로그인 정보가 없습니다.");
+      return;
+    }
     setIsProcessing(true);
     try {
       console.log("Starting worry publication process...");
-      // Fetch users - limit to active ones to avoid permission/payload issues
-      const twoMinsAgo = Timestamp.fromDate(new Date(Date.now() - 2 * 60 * 1000));
-      const usersSnap = await getDocs(query(
-        collection(db, 'users'), 
-        where('lastActive', '>=', twoMinsAgo),
-        limit(20)
-      ));
       
-      let allUsers = usersSnap.docs
-        .map(d => d.data() as UserProfile)
-        .filter(u => u.uid !== user.uid);
-
-      // Fallback: if no active users, get any 10 users
-      if (allUsers.length === 0) {
-        const fallbackSnap = await getDocs(query(collection(db, 'users'), limit(10)));
-        allUsers = fallbackSnap.docs
+      // Step A: Fetch potential candidates (Simplified query to avoid index errors)
+      let allUsers: UserProfile[] = [];
+      try {
+        const usersSnap = await getDocs(query(
+          collection(db, 'users'), 
+          limit(30)
+        ));
+        allUsers = usersSnap.docs
           .map(d => d.data() as UserProfile)
           .filter(u => u.uid !== user.uid);
+      } catch (userFetchError: any) {
+        console.error("Firestore Users Fetch Error:", userFetchError);
+        throw new Error(`사용자 목록을 가져오지 못했습니다: ${userFetchError.message}`);
+      }
+
+      if (allUsers.length === 0) {
+        setFilterAlert("현재 접속 중인 다른 사용자가 없어 사연을 보낼 수 없습니다. 나중에 다시 시도해주세요.");
+        setIsProcessing(false);
+        return;
       }
 
       console.log(`Found ${allUsers.length} potential candidates.`);
 
-      // Simplified candidate info to avoid security/size issues
       const decoratedCandidates = allUsers.map(u => ({
         uid: u.uid,
         gender: u.gender,
         interests: u.interests,
-        pastWorries: [], // Skipping history for now to ensure stability
+        pastWorries: [],
         pastReplies: [],
       }));
 
@@ -320,7 +324,7 @@ export default function App() {
         interests: profile.interests
       };
 
-      // Pass content + candidate list to the LLM backend for matching
+      // Step B: Call Backend LLM
       console.log("Calling LLM backend...");
       const result = await processWorry(content, decoratedCandidates, senderInfo);
 
@@ -330,37 +334,39 @@ export default function App() {
         return;
       }
 
-      // If approved, parse the assigned users
-      const assignedIds = result.assignedUids && result.assignedUids.length > 0 
-        ? result.assignedUids 
-        : [];
+      const assignedIds = (result.assignedUids || []).filter((id: string) => id !== user.uid);
 
       if (assignedIds.length === 0) {
-        setFilterAlert("적절한 답변자를 찾을 수 없어 전송에 실패했습니다. 나중에 다시 시도해주세요.");
+        setFilterAlert("적절한 답변자를 매칭하지 못했습니다. 내용을 조금 더 구체적으로 적어보시겠어요?");
         setIsProcessing(false);
         return;
       }
 
       console.log("Successfully matched users:", assignedIds);
 
-      // Create a doc for EACH matched user
-      await Promise.all(assignedIds.map(async (receiverId: string) => {
-        await addDoc(collection(db, 'letters'), {
-          senderId: user.uid,
-          receiverId, 
-          originalContent: content,
-          refinedContent: content, 
-          type: 'worry',
-          category,
-          createdAt: serverTimestamp(),
-          isRead: false
-        });
-      }));
+      // Step C: Save to Firestore
+      try {
+        await Promise.all(assignedIds.map(async (receiverId: string) => {
+          await addDoc(collection(db, 'letters'), {
+            senderId: user.uid,
+            receiverId, 
+            originalContent: content,
+            refinedContent: content, 
+            type: 'worry',
+            category,
+            createdAt: serverTimestamp(),
+            isRead: false
+          });
+        }));
+      } catch (saveError: any) {
+        console.error("Firestore Save Error:", saveError);
+        throw new Error(`사연 저장 중 오류가 발생했습니다: ${saveError.message}`);
+      }
 
       console.log("All letters saved to Firestore.");
       setView('home');
     } catch (e: any) {
-      console.error("Publication Error Details:", e);
+      console.error("Publication Full Error Details:", e);
       setFilterAlert(`전송 실패: ${e.message || "알 수 없는 오류"}`);
     } finally {
       setIsProcessing(false);

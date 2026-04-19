@@ -1,83 +1,26 @@
-// ===============================================================
-// Assumed Data Model
-// ===============================================================
-//
-// Collection: users
-// Document ID: userId (auth.uid)
-// Fields:
-//   - uid: string (required)
-//   - gender: string
-//   - interests: list
-//   - helpedCount: number
-//   - createdAt: timestamp (required)
-//   - lastActive: timestamp
-//
-// Collection: letters
-// Document ID: auto-generated
-// Fields:
-//   - senderId: string (required) - UID of the sender
-//   - receiverId: string (required) - UID of the receiver
-//   - originalContent: string (required)
-//   - refinedContent: string (required)
-//   - type: string (required, enum: ['worry', 'reply'])
-//   - replyTo: string (optional) - ID of the letter being replied to
-//   - createdAt: timestamp (required)
-//   - isRead: boolean (required)
-//   - feedback: string
-//
-// ===============================================================
-
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
     
     function isAuthenticated() {
       return request.auth != null;
     }
     
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-    
-    function isSender() {
-      return isAuthenticated() && request.auth.uid == request.resource.data.senderId;
-    }
-
-    function isReceiver() {
-      return isAuthenticated() && request.auth.uid == resource.data.receiverId;
-    }
-
-    // Relaxed for prototype due to frequent field changes like 'lastActive', 'helpedCount'
-    function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'gender', 'interests', 'createdAt']) &&
-             data.uid is string && data.uid == request.auth.uid;
-    }
-
-    // ===============================================================
-    // Rules
-    // ===============================================================
-
     match /users/{userId} {
+      // 로그인된 사용자라면 누구나 읽기 가능 (목록 조회 포함)
       allow read: if isAuthenticated();
-      // Allow creation by owner
-      allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      // Allow update by owner (updating their own profile), OR any authenticated user if they are ONLY incrementing 'helpedCount'
-      allow update: if (isOwner(userId)) || (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['helpedCount']));
+      // 자기 자신의 프로필만 생성/수정 가능
+      allow create, update: if isAuthenticated() && request.auth.uid == userId;
     }
 
     match /letters/{letterId} {
-      // Users can read letters they sent or received
-      allow read: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
+      // 자신이 보냈거나 받은 편지만 읽기 가능
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.senderId || request.auth.uid == request.auth.uid == resource.data.receiverId);
       
-      // Anyone authenticated can create a letter (to send to someone)
-      // Loosened specific field checks for the prototype to prevent random failures
+      // 로그인된 사용자는 편지 생성 가능 (보내는 사람 ID 검증)
       allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
       
-      // Only receiver or sender can update (receiver marks as read, original sender leaves feedback)
+      // 모든 로그인된 사용자의 업데이트 허용 (마크 읽음 처리 등)
       allow update: if isAuthenticated();
     }
     
