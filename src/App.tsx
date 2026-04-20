@@ -22,7 +22,7 @@ import {
   getDoc,
   getDocs
 } from 'firebase/firestore';
-import { getToken, onMessage } from 'firebase/messaging';
+import { getToken, onMessage, deleteToken } from 'firebase/messaging';
 import { auth, db, googleProvider, messaging } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -127,19 +127,24 @@ export default function App() {
   const saveFCMToken = async () => {
     if (!messaging || !user) return;
     try {
-      // 1. Register the FCM service worker explicitly to avoid conflict with sw.js
-      let registration: ServiceWorkerRegistration;
+      console.log("FCM: Starting token registration...");
+      
+      // 1. Register the FCM service worker explicitly
+      const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
+        scope: '/'
+      });
+      await navigator.serviceWorker.ready;
+      console.log("FCM: Service Worker Registered:", registration);
+
+      // 2. Force delete old token first to ensure a fresh one
       try {
-        registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
-          scope: '/'
-        });
-        console.log("FCM Service Worker Registered:", registration);
-      } catch (swErr) {
-        console.error("FCM SW Registration Failed:", swErr);
-        return;
+        await deleteToken(messaging);
+        console.log("FCM: Old token cleared.");
+      } catch (e) {
+        console.warn("FCM: Token deletion skipped", e);
       }
 
-      // 2. Get token using the registration
+      // 3. Get fresh token
       const token = await getToken(messaging, { 
         vapidKey: 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M',
         serviceWorkerRegistration: registration
@@ -147,12 +152,18 @@ export default function App() {
 
       if (token) {
         await updateDoc(doc(db, 'users', user.uid), {
-          fcmToken: token
+          fcmToken: token,
+          lastTokenRefresh: serverTimestamp()
         });
-        console.log("FCM Token Saved:", token);
+        console.log("FCM: New Token Saved:", token);
+        // Only alert if manual permission was granted to confirm it worked
+        if (view === 'settings') alert("알림 설정이 완료되었습니다! 📻");
+      } else {
+        console.error("FCM: No token generated.");
       }
     } catch (err) {
-      console.error("FCM Token Error", err);
+      console.error("FCM Token Error:", err);
+      if (view === 'settings') alert("알림 설정 중 오류가 발생했습니다.");
     }
   };
   // Auth & Profile Listener
