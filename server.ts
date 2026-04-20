@@ -4,6 +4,48 @@ dotenv.config(); // Explicitly call config
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
+import admin from "firebase-admin";
+
+// Initialize Firebase Admin
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  try {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("Firebase Admin initialized successfully.");
+  } catch (err) {
+    console.error("Firebase Admin initialization failed:", err);
+  }
+} else {
+  console.warn("FIREBASE_SERVICE_ACCOUNT not found in environment variables.");
+}
+
+const db = admin.apps.length > 0 ? admin.firestore() : null;
+const messaging = admin.apps.length > 0 ? admin.messaging() : null;
+
+async function sendPushNotification(uid: string, title: string, body: string) {
+  if (!db || !messaging) return;
+
+  try {
+    const userDoc = await db.collection('users').doc(uid).get();
+    if (userDoc.exists) {
+      const fcmToken = userDoc.data()?.fcmToken;
+      if (fcmToken) {
+        await messaging.send({
+          token: fcmToken,
+          notification: { title, body },
+          webpush: {
+            fcmOptions: { link: '/' }
+          }
+        });
+        console.log(`Notification sent to ${uid}`);
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to send notification to ${uid}:`, err);
+  }
+}
 
 async function fetchFromOpenRouter(systemInstruction: string, userContent: string) {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -168,6 +210,34 @@ Return JSON: { "content": "Your reply here" }`;
       console.error("Comment Filter Error:", error?.message || error);
       res.status(500).json({ error: "Internal Server Error" });
     }
+  });
+
+  app.post("/api/notify-new-worry", async (req, res) => {
+    const { receiverUids } = req.body;
+    if (receiverUids && Array.isArray(receiverUids)) {
+      for (const uid of receiverUids) {
+        if (!uid.startsWith('bot_')) {
+          await sendPushNotification(uid, "📻 미드나잇 라디오", "새로운 사연이 도착했습니다.");
+        }
+      }
+    }
+    res.json({ status: "ok" });
+  });
+
+  app.post("/api/notify-new-reply", async (req, res) => {
+    const { receiverUid } = req.body;
+    if (receiverUid && !receiverUid.startsWith('bot_')) {
+      await sendPushNotification(receiverUid, "📻 미드나잇 라디오", "보낸 사연에 답장이 도착했습니다.");
+    }
+    res.json({ status: "ok" });
+  });
+
+  app.post("/api/notify-new-comment", async (req, res) => {
+    const { receiverUid } = req.body;
+    if (receiverUid && !receiverUid.startsWith('bot_')) {
+      await sendPushNotification(receiverUid, "📻 미드나잇 라디오", "남겨주신 답장에 코멘트가 달렸습니다.");
+    }
+    res.json({ status: "ok" });
   });
 
   // Vite middleware for development

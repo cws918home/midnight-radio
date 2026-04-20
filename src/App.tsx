@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   onAuthStateChanged, 
-  signInAnonymously, 
-  User as FirebaseUser
+  signInWithPopup,
+  User as FirebaseUser,
+  signOut
 } from 'firebase/auth';
 import { 
   collection, 
@@ -21,7 +22,8 @@ import {
   getDoc,
   getDocs
 } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { getToken, onMessage } from 'firebase/messaging';
+import { auth, db, googleProvider, messaging } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, Trash2, FileText, Bell, Share2, QrCode
@@ -70,7 +72,7 @@ export default function App() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   
-  const [view, setView] = useState<'onboarding' | 'home' | 'write_worry' | 'write_reply' | 'inbox' | 'my_replies' | 'read_reply' | 'read_my_reply' | 'settings'>('onboarding');
+  const [view, setView] = useState<'login' | 'onboarding' | 'home' | 'write_worry' | 'write_reply' | 'inbox' | 'my_replies' | 'read_reply' | 'read_my_reply' | 'settings'>('login');
   
   const [feedWorries, setFeedWorries] = useState<Letter[]>([]);
   const [inboxReplies, setInboxReplies] = useState<Letter[]>([]);
@@ -116,12 +118,34 @@ export default function App() {
     if ('Notification' in window) {
       const permission = await Notification.requestPermission();
       setNotificationPermission(permission);
+      if (permission === 'granted') {
+        saveFCMToken();
+      }
+    }
+  };
+
+  const saveFCMToken = async () => {
+    if (!messaging || !user) return;
+    try {
+      // Use your VAPID public key here
+      const token = await getToken(messaging, { 
+        vapidKey: 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M' 
+      });
+      if (token) {
+        await updateDoc(doc(db, 'users', user.uid), {
+          fcmToken: token
+        });
+        console.log("FCM Token Saved:", token);
+      }
+    } catch (err) {
+      console.error("FCM Token Error", err);
     }
   };
 
   // Auth & Profile Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setLoading(true);
       if (currentUser) {
         setUser(currentUser);
         
@@ -131,31 +155,40 @@ export default function App() {
         if (userSnap.exists()) {
           const userData = userSnap.data() as UserProfile;
           setProfile(userData);
-          // Only auto-redirect to home if we are not currently in the onboarding process
-          setView(prev => (prev === 'onboarding' ? 'home' : prev));
+          // Only auto-redirect to home if we are not currently in the onboarding process or settings
+          setView(prev => (['onboarding', 'login'].includes(prev) ? 'home' : prev));
+          
+          // Try to get notification permission and token
+          if ('Notification' in window && Notification.permission === 'granted') {
+            saveFCMToken();
+          }
         } else {
           setProfile(null);
           // If no profile, stay on onboarding
           setView('onboarding');
         }
-        setLoading(false);
       } else {
-        // Automatic Anonymous Sign-in
-        try {
-          await signInAnonymously(auth);
-        } catch (err: any) {
-          console.error("Anon Login Error", err);
-          if (err.code === 'auth/admin-restricted-operation') {
-            setError("Firebase 콘솔에서 '익명 로그인'을 활성화해야 합니다.");
-          } else {
-            setError("네트워크 문제로 익명 접속에 실패했습니다.");
-          }
-          setLoading(false);
-        }
+        setUser(null);
+        setProfile(null);
+        setView('login');
       }
+      setLoading(false);
     });
     return () => unsubscribe();
   }, []);
+
+  const handleGoogleLogin = async () => {
+    setIsProcessing(true);
+    setError(null);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err: any) {
+      console.error("Login Error", err);
+      setError("구글 로그인에 실패했습니다.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   // Active Users Listener
   const [activeUsersCount, setActiveUsersCount] = useState(1);
@@ -486,12 +519,34 @@ export default function App() {
                 feedback: null
               });
               console.log(`[Background] AI reply from ${receiverId} saved.`);
+
+              // Notify the user about the AI reply
+              try {
+                await fetch('/api/notify-new-reply', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ receiverUid: user.uid })
+                });
+              } catch (notifyErr) {
+                console.error("AI Notification failed", notifyErr);
+              }
             } catch (botErr) {
               console.error(`[Background] AI bot reply failed for ${receiverId}:`, botErr);
             }
           })(); // IIFE to run in background
         }
       }));
+
+      // Step 4: Notify recipients via Push Notification
+      try {
+        await fetch('/api/notify-new-worry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receiverUids: assignedIds })
+        });
+      } catch (notifyErr) {
+        console.error("Notification failed", notifyErr);
+      }
 
       console.log("Worry submission successful.");
       setView('home');
@@ -529,6 +584,17 @@ export default function App() {
         isRead: false,
         feedback: null
       });
+
+      // Notify the worry sender
+      try {
+        await fetch('/api/notify-new-reply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receiverUid: worry.senderId })
+        });
+      } catch (notifyErr) {
+        console.error("Notification failed", notifyErr);
+      }
 
       setView('home');
       setSelectedWorry(null);
@@ -655,6 +721,39 @@ export default function App() {
       <main className={cn("max-w-2xl mx-auto px-6", view === 'onboarding' ? "pt-12 pb-12" : "pt-24 pb-32")}>
         <AnimatePresence mode="wait">
           
+          {/* 0. Login View */}
+          {view === 'login' && (
+            <motion.div key="login" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center justify-center min-h-[70vh] space-y-8">
+              <div className="text-center space-y-4">
+                <div className="w-24 h-24 bg-[#FAEDCD] rounded-full flex items-center justify-center mx-auto shadow-md">
+                  <Radio className="w-12 h-12 text-[#D4A373]" />
+                </div>
+                <h1 className="text-4xl font-serif font-bold text-[#5A5A40]">Midnight Radio</h1>
+                <p className="text-[#8B8B6B]">나의 이야기가 밤하늘을 타고<br/>누군가에게 닿는 시간</p>
+              </div>
+
+              <button
+                onClick={handleGoogleLogin}
+                disabled={isProcessing}
+                className="flex items-center gap-3 px-8 py-4 bg-white border border-[#E9EDC9] rounded-2xl shadow-sm hover:shadow-md transition-all text-[#5A5A40] font-medium disabled:opacity-50"
+              >
+                {isProcessing ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                  </svg>
+                )}
+                구글로 시작하기
+              </button>
+
+              {error && <p className="text-sm text-red-500">{error}</p>}
+            </motion.div>
+          )}
+
           {/* 1. Onboarding View */}
           {view === 'onboarding' && (
             <motion.div key="onboarding" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-8">
@@ -673,10 +772,17 @@ export default function App() {
           {/* 1.5 Settings View */}
           {view === 'settings' && profile && (
             <motion.div key="settings" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-8">
-              <button onClick={() => setView('home')} className="mb-2 flex items-center gap-2 text-[#8B8B6B] hover:text-[#5A5A40] transition-colors">
-                <ArrowLeft className="w-4 h-4" /> 돌아가기
-              </button>
-              
+              <div className="flex items-center justify-between">
+                <button onClick={() => setView('home')} className="flex items-center gap-2 text-[#8B8B6B] hover:text-[#5A5A40] transition-colors">
+                  <ArrowLeft className="w-4 h-4" /> 돌아가기
+                </button>
+                <button 
+                 onClick={() => signOut(auth)}
+                 className="px-4 py-2 text-sm text-red-500 hover:bg-red-50 rounded-xl transition-colors font-medium"
+                >
+                  로그아웃
+                </button>
+              </div>
               <div className="flex items-center gap-4 bg-[#FAEDCD]/50 p-6 rounded-2xl border border-[#FAEDCD] mb-8">
                 <div className="w-14 h-14 bg-white rounded-full flex items-center justify-center text-[#E07A5F] shadow-sm">
                   <Heart className="w-7 h-7" />
@@ -1078,7 +1184,12 @@ export default function App() {
                         <div className="bg-white p-6 rounded-2xl border border-[#FAEDCD]">
                           <h4 className="font-bold text-[#5A5A40] mb-2 text-sm">따뜻한 마음을 받은 답장, 코멘트 남기기</h4>
                           <p className="text-xs text-[#8B8B6B] mb-4">내 고민을 들어준 분에게 감사 인사나 추가 코멘트를 남길 수 있습니다.</p>
-                          <CommentForm replyId={selectedReply.id} onCommentAdded={(c) => setSelectedReply({...selectedReply, publisherComment: c})} />
+                          <CommentForm 
+                            replyId={selectedReply.id} 
+                            replierId={selectedReply.senderId}
+                            onCommentAdded={(c) => setSelectedReply({...selectedReply, publisherComment: c})} 
+                          />
+
                         </div>
                       ) : (
                         <div className="bg-[#FAEDCD]/50 p-6 rounded-2xl border border-[#E9EDC9]">
@@ -1323,10 +1434,10 @@ function Tabs({ tabs, render }: { tabs: {id: string, label: string}[], render: (
 
 import { processComment } from './services/geminiService';
 
-function CommentForm({ replyId, onCommentAdded }: { replyId: string, onCommentAdded: (c: string) => void }) {
+function CommentForm({ replyId, replierId, onCommentAdded }: { replyId: string, replierId: string, onCommentAdded: (c: string) => void }) {
   const [content, setContent] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   const charCount = content.replace(/\s/g, '').length;
   const isLengthValid = charCount >= 10;
 
@@ -1341,6 +1452,18 @@ function CommentForm({ replyId, onCommentAdded }: { replyId: string, onCommentAd
         return;
       }
       await updateDoc(doc(db, 'letters', replyId), { publisherComment: content });
+
+      // Notify the replier
+      try {
+        await fetch('/api/notify-new-comment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receiverUid: replierId })
+        });
+      } catch (notifyErr) {
+        console.error("Notification failed", notifyErr);
+      }
+
       onCommentAdded(content);
     } catch (e) {
       console.error(e);
@@ -1349,7 +1472,6 @@ function CommentForm({ replyId, onCommentAdded }: { replyId: string, onCommentAd
       setIsProcessing(false);
     }
   };
-
   return (
     <div className="space-y-4">
       <div className="relative">
