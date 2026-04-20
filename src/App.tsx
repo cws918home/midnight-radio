@@ -127,10 +127,24 @@ export default function App() {
   const saveFCMToken = async () => {
     if (!messaging || !user) return;
     try {
-      // Use your VAPID public key here
+      // 1. Register the FCM service worker explicitly to avoid conflict with sw.js
+      let registration: ServiceWorkerRegistration;
+      try {
+        registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
+          scope: '/'
+        });
+        console.log("FCM Service Worker Registered:", registration);
+      } catch (swErr) {
+        console.error("FCM SW Registration Failed:", swErr);
+        return;
+      }
+
+      // 2. Get token using the registration
       const token = await getToken(messaging, { 
-        vapidKey: 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M' 
+        vapidKey: 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M',
+        serviceWorkerRegistration: registration
       });
+
       if (token) {
         await updateDoc(doc(db, 'users', user.uid), {
           fcmToken: token
@@ -141,7 +155,6 @@ export default function App() {
       console.error("FCM Token Error", err);
     }
   };
-
   // Auth & Profile Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -155,17 +168,29 @@ export default function App() {
         if (userSnap.exists()) {
           const userData = userSnap.data() as UserProfile;
           setProfile(userData);
-          // Only auto-redirect to home if we are not currently in the onboarding process or settings
           setView(prev => (['onboarding', 'login'].includes(prev) ? 'home' : prev));
           
-          // Try to get notification permission and token
           if ('Notification' in window && Notification.permission === 'granted') {
             saveFCMToken();
           }
         } else {
           setProfile(null);
-          // If no profile, stay on onboarding
           setView('onboarding');
+        }
+
+        // Add Foreground Message Listener
+        if (messaging) {
+          const unsubMessaging = onMessage(messaging, (payload) => {
+            console.log("Foreground Message received:", payload);
+            // Browser notification or UI toast
+            if (Notification.permission === 'granted') {
+              new Notification(payload.notification?.title || "미드나잇 라디오", {
+                body: payload.notification?.body,
+                icon: '/pwa-192x192.png'
+              });
+            }
+          });
+          return () => unsubMessaging();
         }
       } else {
         setUser(null);
@@ -175,7 +200,7 @@ export default function App() {
       setLoading(false);
     });
     return () => unsubscribe();
-  }, []);
+  }, [messaging]); // Add messaging to dependencies
 
   const handleGoogleLogin = async () => {
     setIsProcessing(true);
