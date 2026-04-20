@@ -4,7 +4,9 @@ dotenv.config(); // Explicitly call config
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import admin from "firebase-admin";
+import { initializeApp, cert, getApps } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
 import fs from "fs";
 
 // Read client config to get database ID
@@ -24,10 +26,12 @@ if (fs.existsSync(clientConfigPath)) {
 if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   try {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    console.log("Firebase Admin initialized successfully.");
+    if (getApps().length === 0) {
+      initializeApp({
+        credential: cert(serviceAccount)
+      });
+      console.log("Firebase Admin initialized successfully.");
+    }
   } catch (err) {
     console.error("Firebase Admin initialization failed:", err);
   }
@@ -35,8 +39,8 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.warn("FIREBASE_SERVICE_ACCOUNT not found in environment variables.");
 }
 
-const db = admin.apps.length > 0 ? admin.firestore(firestoreDatabaseId) : null;
-const messaging = admin.apps.length > 0 ? admin.messaging() : null;
+const db = getApps().length > 0 ? getFirestore(firestoreDatabaseId) : null;
+const messaging = getApps().length > 0 ? getMessaging() : null;
 
 async function sendPushNotification(uid: string, title: string, body: string) {
   if (!db || !messaging) {
