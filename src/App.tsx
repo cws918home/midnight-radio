@@ -129,17 +129,36 @@ export default function App() {
   const saveFCMToken = async () => {
     if (!messaging || !user) return;
     try {
-      console.log("FCM: Starting token registration...");
+      console.log("FCM: Cleaning up service workers...");
       
+      // 1. Unregister ALL existing service workers to prevent conflicts
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        await reg.unregister();
+        console.log("FCM: Old SW Unregistered");
+      }
+
+      // 2. Register ONLY the FCM service worker
       const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
         scope: '/'
       });
-      await navigator.serviceWorker.ready;
+      
+      // Wait for it to become active
+      await new Promise<void>((resolve) => {
+        if (registration.active) resolve();
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          newWorker?.addEventListener('statechange', () => {
+            if (newWorker.state === 'activated') resolve();
+          });
+        });
+        // Timeout as fallback
+        setTimeout(resolve, 2000);
+      });
 
-      try {
-        await deleteToken(messaging);
-      } catch (e) {}
+      console.log("FCM: New SW Active:", registration);
 
+      // 3. Get fresh token
       const token = await getToken(messaging, { 
         vapidKey: 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M',
         serviceWorkerRegistration: registration

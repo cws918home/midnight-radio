@@ -69,8 +69,19 @@ async function sendPushNotification(uid: string, title: string, body: string) {
     await messaging.send({
       token: fcmToken,
       notification: { title, body },
+      data: {
+        title,
+        body,
+        url: '/'
+      },
       webpush: {
-        fcmOptions: { link: '/' }
+        fcmOptions: { link: '/' },
+        notification: {
+          icon: '/pwa-192x192.png',
+          badge: '/pwa-192x192.png',
+          tag: 'midnight-radio-notification',
+          renotify: true
+        }
       }
     });
     console.log(`✅ Notification successfully sent to ${uid}`);
