@@ -124,46 +124,39 @@ export default function App() {
     }
   };
 
+  const [fcmDebugToken, setFcmDebugToken] = useState<string>('');
+
   const saveFCMToken = async () => {
     if (!messaging || !user) return;
     try {
       console.log("FCM: Starting token registration...");
       
-      // 1. Register the FCM service worker explicitly
       const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
         scope: '/'
       });
       await navigator.serviceWorker.ready;
-      console.log("FCM: Service Worker Registered:", registration);
 
-      // 2. Force delete old token first to ensure a fresh one
       try {
         await deleteToken(messaging);
-        console.log("FCM: Old token cleared.");
-      } catch (e) {
-        console.warn("FCM: Token deletion skipped", e);
-      }
+      } catch (e) {}
 
-      // 3. Get fresh token
       const token = await getToken(messaging, { 
         vapidKey: 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M',
         serviceWorkerRegistration: registration
       });
 
       if (token) {
+        setFcmDebugToken(token);
         await updateDoc(doc(db, 'users', user.uid), {
           fcmToken: token,
           lastTokenRefresh: serverTimestamp()
         });
         console.log("FCM: New Token Saved:", token);
-        // Only alert if manual permission was granted to confirm it worked
-        if (view === 'settings') alert("알림 설정이 완료되었습니다! 📻");
-      } else {
-        console.error("FCM: No token generated.");
+        if (view === 'settings') alert("알림 설정 완료! 토큰이 갱신되었습니다.");
       }
     } catch (err) {
       console.error("FCM Token Error:", err);
-      if (view === 'settings') alert("알림 설정 중 오류가 발생했습니다.");
+      alert("오류: " + (err instanceof Error ? err.message : "알림 설정 실패"));
     }
   };
   // Auth & Profile Listener
@@ -851,8 +844,13 @@ export default function App() {
                   )}>
                     {notificationPermission === 'granted' ? '활성화됨' : (notificationPermission === 'denied' ? '차단됨' : '설정 필요')}
                   </div>
-                </div>
+                  </div>
 
+                  {fcmDebugToken && (
+                  <div className="p-3 bg-gray-50 rounded-xl text-[8px] break-all text-gray-400 font-mono">
+                    <strong>FCM Token:</strong> {fcmDebugToken}
+                  </div>
+                  )}
                 {notificationPermission !== 'granted' && (
                   <button 
                     onClick={requestNotificationPermission}
