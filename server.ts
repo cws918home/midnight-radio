@@ -5,6 +5,20 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import admin from "firebase-admin";
+import fs from "fs";
+
+// Read client config to get database ID
+const clientConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
+let firestoreDatabaseId = '(default)';
+if (fs.existsSync(clientConfigPath)) {
+  try {
+    const clientConfig = JSON.parse(fs.readFileSync(clientConfigPath, 'utf-8'));
+    firestoreDatabaseId = clientConfig.firestoreDatabaseId || '(default)';
+    console.log(`Using Firestore Database ID: ${firestoreDatabaseId}`);
+  } catch (err) {
+    console.error("Failed to read client config for database ID", err);
+  }
+}
 
 // Initialize Firebase Admin
 if (process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -21,29 +35,43 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.warn("FIREBASE_SERVICE_ACCOUNT not found in environment variables.");
 }
 
-const db = admin.apps.length > 0 ? admin.firestore() : null;
+const db = admin.apps.length > 0 ? admin.firestore(firestoreDatabaseId) : null;
 const messaging = admin.apps.length > 0 ? admin.messaging() : null;
 
 async function sendPushNotification(uid: string, title: string, body: string) {
-  if (!db || !messaging) return;
+  if (!db || !messaging) {
+    console.warn("Skipping notification: Firebase Admin not initialized.");
+    return;
+  }
 
   try {
+    console.log(`Attempting to send notification to UID: ${uid}...`);
     const userDoc = await db.collection('users').doc(uid).get();
-    if (userDoc.exists) {
-      const fcmToken = userDoc.data()?.fcmToken;
-      if (fcmToken) {
-        await messaging.send({
-          token: fcmToken,
-          notification: { title, body },
-          webpush: {
-            fcmOptions: { link: '/' }
-          }
-        });
-        console.log(`Notification sent to ${uid}`);
-      }
+    
+    if (!userDoc.exists) {
+      console.warn(`User ${uid} not found in Firestore (Database: ${firestoreDatabaseId})`);
+      return;
     }
+
+    const userData = userDoc.data();
+    const fcmToken = userData?.fcmToken;
+
+    if (!fcmToken) {
+      console.warn(`User ${uid} exists but has no fcmToken registered.`);
+      return;
+    }
+
+    console.log(`Found token for ${uid}, sending push via FCM...`);
+    await messaging.send({
+      token: fcmToken,
+      notification: { title, body },
+      webpush: {
+        fcmOptions: { link: '/' }
+      }
+    });
+    console.log(`✅ Notification successfully sent to ${uid}`);
   } catch (err) {
-    console.error(`Failed to send notification to ${uid}:`, err);
+    console.error(`❌ Failed to send notification to ${uid}:`, err);
   }
 }
 
