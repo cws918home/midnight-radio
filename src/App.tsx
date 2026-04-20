@@ -158,49 +158,54 @@ export default function App() {
   // Auth & Profile Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setLoading(true);
-      if (currentUser) {
-        setUser(currentUser);
-        
-        const userRef = doc(db, 'users', currentUser.uid);
-        const userSnap = await getDoc(userRef);
-        
-        if (userSnap.exists()) {
-          const userData = userSnap.data() as UserProfile;
-          setProfile(userData);
-          setView(prev => (['onboarding', 'login'].includes(prev) ? 'home' : prev));
+      try {
+        setLoading(true);
+        if (currentUser) {
+          setUser(currentUser);
           
-          if ('Notification' in window && Notification.permission === 'granted') {
-            saveFCMToken();
+          const userRef = doc(db, 'users', currentUser.uid);
+          const userSnap = await getDoc(userRef);
+          
+          if (userSnap.exists()) {
+            const userData = userSnap.data() as UserProfile;
+            setProfile(userData);
+            setView(prev => (['onboarding', 'login'].includes(prev) ? 'home' : prev));
+            
+            if ('Notification' in window && Notification.permission === 'granted') {
+              saveFCMToken();
+            }
+          } else {
+            setProfile(null);
+            setView('onboarding');
           }
         } else {
+          setUser(null);
           setProfile(null);
-          setView('onboarding');
+          setView('login');
         }
-
-        // Add Foreground Message Listener
-        if (messaging) {
-          const unsubMessaging = onMessage(messaging, (payload) => {
-            console.log("Foreground Message received:", payload);
-            // Browser notification or UI toast
-            if (Notification.permission === 'granted') {
-              new Notification(payload.notification?.title || "미드나잇 라디오", {
-                body: payload.notification?.body,
-                icon: '/pwa-192x192.png'
-              });
-            }
-          });
-          return () => unsubMessaging();
-        }
-      } else {
-        setUser(null);
-        setProfile(null);
-        setView('login');
+      } catch (err) {
+        console.error("Auth State Error", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
     return () => unsubscribe();
-  }, [messaging]); // Add messaging to dependencies
+  }, []);
+
+  // Foreground Message Listener
+  useEffect(() => {
+    if (!messaging || !user) return;
+    const unsubMessaging = onMessage(messaging, (payload) => {
+      console.log("Foreground Message received:", payload);
+      if (Notification.permission === 'granted') {
+        new Notification(payload.notification?.title || "미드나잇 라디오", {
+          body: payload.notification?.body,
+          icon: '/pwa-192x192.png'
+        });
+      }
+    });
+    return () => unsubMessaging();
+  }, [user]);
 
   const handleGoogleLogin = async () => {
     setIsProcessing(true);
