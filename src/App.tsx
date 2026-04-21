@@ -33,7 +33,7 @@ import { cn } from './lib/utils';
 import { processWorry, processReply, generateAIReply, processComment } from './services/geminiService';
 
 // --- Constants ---
-const CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래'];
+const CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래', '잡담'];
 const GENDERS = [
   { id: 'male', label: '남성' }, 
   { id: 'female', label: '여성' }, 
@@ -1518,7 +1518,7 @@ function OnboardingForm({ onSubmit, isProcessing, initialGender = '', initialInt
       </div>
 
       <div className="space-y-4">
-        <h3 className="font-bold text-lg">가장 관심있는 고민 주제 (원하는 만큼 복수 선택)</h3>
+        <h3 className="font-bold text-lg">가장 관심있는 주제 (복수 선택)</h3>
         <div className="flex flex-wrap gap-2">
           {CATEGORIES.map(cat => {
             const isSelected = interests.includes(cat);
