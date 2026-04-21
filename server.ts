@@ -77,7 +77,7 @@ ${WORRY_CATEGORIES.join(', ')}
 Rules:
 1. If the text is inappropriate, abusive, violent, sexually explicit, hateful, or spammy, return exactly:
 { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
-2. If appropriate, infer 1 or more categories from the fixed vocabulary above.
+2. If appropriate, infer 1 or more categories from the fixed vocabulary above. Zero is not allowed. It is acceptable to be flexible when selecting additional categories.
 3. Never fabricate labels outside the fixed vocabulary.
 4. Return JSON only.
 5. Approved shape must be exactly:
@@ -86,16 +86,22 @@ ${strictRetry ? '6. This is a retry because the previous answer had invalid or e
 
   const resultObj = await fetchFromOpenRouter(systemInstruction, content);
 
-  if (resultObj.status === 'rejected') {
+  if (!resultObj || typeof resultObj !== 'object') {
+    return { status: 'invalid' as const };
+  }
+
+  if ('status' in resultObj && resultObj.status === 'rejected') {
     return resultObj;
   }
 
   const rawCategories =
-    resultObj.categories ??
-    (typeof resultObj.category === 'string' ? [resultObj.category] : resultObj.category);
+    ('categories' in resultObj ? resultObj.categories : undefined) ??
+    (typeof ('category' in resultObj ? resultObj.category : undefined) === 'string'
+      ? [('category' in resultObj ? resultObj.category : undefined)]
+      : ('category' in resultObj ? resultObj.category : undefined));
   const normalizedCategories = normalizeWorryCategories(rawCategories);
 
-  if (resultObj.status === 'approved' && normalizedCategories.length > 0) {
+  if ('status' in resultObj && resultObj.status === 'approved' && normalizedCategories.length > 0) {
     return { status: 'approved', categories: normalizedCategories };
   }
 
@@ -201,11 +207,7 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
       return JSON.parse(textContent);
     } catch (parseError) {
       console.error("JSON Parse Error. Raw content:", textContent);
-      // Fallback response if JSON parsing fails
-      if (textContent.includes("approved")) {
-        return { status: "approved" };
-      }
-      return { status: "error", reason: "응답 해석 실패" };
+      return null;
     }
   } catch (error: any) {
     console.error("Fetch operation failed:", error.message);
@@ -254,7 +256,7 @@ async function startServer() {
       res.json({ status: "rejected", reason: "카테고리를 결정하지 못했습니다. 잠시 후 다시 시도해주세요." });
     } catch (error: any) {
       console.error("Backend API Error:", error?.message || error);
-      res.status(500).json({ error: "Internal Server Error" });
+      res.json({ status: "rejected", reason: "고민을 분류하지 못했습니다. 잠시 후 다시 시도해주세요." });
     }
   });
 

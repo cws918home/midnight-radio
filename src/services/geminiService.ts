@@ -1,6 +1,6 @@
 type ProcessWorryResult =
   | { status: "approved"; categories: string[] }
-  | { status: "rejected" | "error"; reason: string };
+  | { status: "rejected"; reason: string };
 
 export async function processWorry(content: string): Promise<ProcessWorryResult> {
   try {
@@ -13,7 +13,7 @@ export async function processWorry(content: string): Promise<ProcessWorryResult>
     return await response.json();
   } catch (error) {
     console.error("Backend LLM API Error:", error);
-    return { status: "error", reason: "고민을 분류하지 못했습니다. 잠시 후 다시 시도해주세요." };
+    return { status: "rejected", reason: "고민을 분류하지 못했습니다. 잠시 후 다시 시도해주세요." };
   }
 }
 
