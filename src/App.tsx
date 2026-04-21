@@ -66,6 +66,9 @@ interface Letter {
   publisherComment?: string;
   publicationGroupId?: string;
   isAiGenerated?: boolean;
+  matchOverlapCount?: number;
+  matchSelectionType?: 'matched' | 'random_fallback' | 'ai' | 'ai_safety_fallback';
+  matchCategoriesSnapshot?: string[];
 }
 
 interface SentPublicationGroup {
@@ -84,6 +87,14 @@ const AI_BOT_PROFILES = [
   { uid: 'bot_friend', gender: 'hidden', interests: [] as string[] }
 ] as const;
 
+type MatchSelectionType = 'matched' | 'random_fallback' | 'ai' | 'ai_safety_fallback';
+
+type DeliveryRecipient = Pick<UserProfile, 'uid' | 'gender' | 'interests'> & {
+  matchOverlapCount: number;
+  matchSelectionType: MatchSelectionType;
+  matchCategoriesSnapshot: string[];
+};
+
 const getLetterCategories = (letter: Letter) =>
   (letter.categories ?? (letter.category ? [letter.category] : [])).filter(Boolean) as string[];
 
@@ -100,6 +111,65 @@ const shuffleArray = <T,>(items: T[]) => {
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
   return shuffled;
+};
+
+const countCategoryOverlap = (candidateInterests: string[] = [], inferredCategories: string[]) =>
+  candidateInterests.filter(interest => inferredCategories.includes(interest)).length;
+
+const appendRecipientIfUnselected = (
+  selectedRecipients: DeliveryRecipient[],
+  recipient: DeliveryRecipient
+) => {
+  if (selectedRecipients.some(selected => selected.uid === recipient.uid)) {
+    return false;
+  }
+
+  selectedRecipients.push(recipient);
+  return true;
+};
+
+const takeRandomUnselectedHumans = (
+  humans: UserProfile[],
+  selectedRecipients: DeliveryRecipient[],
+  count: number,
+  inferredCategories: string[]
+) => {
+  const selectedIds = new Set(selectedRecipients.map(({ uid }) => uid));
+
+  return shuffleArray(humans)
+    .filter(human => !selectedIds.has(human.uid))
+    .filter(human => countCategoryOverlap(human.interests || [], inferredCategories) === 0)
+    .slice(0, count)
+    .map<DeliveryRecipient>(human => ({
+      uid: human.uid,
+      gender: human.gender,
+      interests: human.interests || [],
+      matchOverlapCount: 0,
+      matchSelectionType: 'random_fallback',
+      matchCategoriesSnapshot: [...inferredCategories],
+    }));
+};
+
+const getNextUnselectedAiRecipient = (
+  selectedRecipients: DeliveryRecipient[],
+  selectionType: Extract<MatchSelectionType, 'ai' | 'ai_safety_fallback'>,
+  inferredCategories: string[]
+): DeliveryRecipient => {
+  const selectedIds = new Set(selectedRecipients.map(({ uid }) => uid));
+  const nextBot = AI_BOT_PROFILES.find(bot => !selectedIds.has(bot.uid));
+
+  if (!nextBot) {
+    throw new Error('No unselected AI bot available for worry routing.');
+  }
+
+  return {
+    uid: nextBot.uid,
+    gender: nextBot.gender,
+    interests: [...inferredCategories],
+    matchOverlapCount: 0,
+    matchSelectionType: selectionType,
+    matchCategoriesSnapshot: [...inferredCategories],
+  };
 };
 
 const buildLegacyPublicationFingerprint = (letter: Letter) => {
@@ -445,15 +515,12 @@ export default function App() {
         
         // Final Filter Logic (Applied on the client side):
         // 1. Show if receiverId is 'public' (Admin/Global) -> ALWAYS SHOW
-        // 2. Show if receiverId is MY UID AND it matches any of MY INTERESTS
+        // 2. Show if receiverId is MY UID, regardless of category overlap
         let filtered = allWorries.filter(w => {
           if (w.receiverId === 'public') return true;
           
           if (w.receiverId === profile.uid) {
-            const worryCats = (w.categories || (w.category ? [w.category] : [])) as string[];
-            const userInterests = profile.interests || [];
-            const hasOverlap = worryCats.some(cat => userInterests.includes(cat));
-            return hasOverlap;
+            return true;
           }
           return false;
         });
@@ -656,8 +723,7 @@ export default function App() {
 
       const humansByOverlap = new Map<number, UserProfile[]>();
       for (const human of allHumanUsers) {
-        const userInterests = human.interests || [];
-        const overlapCount = userInterests.filter(interest => inferredCategories.includes(interest)).length;
+        const overlapCount = countCategoryOverlap(human.interests || [], inferredCategories);
         if (overlapCount <= 0) continue;
 
         const group = humansByOverlap.get(overlapCount) ?? [];
@@ -665,7 +731,7 @@ export default function App() {
         humansByOverlap.set(overlapCount, group);
       }
 
-      const assignedCandidates: Array<UserProfile | { uid: string; gender: string; interests: string[] }> = [];
+      const selectedRecipients: DeliveryRecipient[] = [];
       const sortedOverlapCounts = [...humansByOverlap.keys()].sort((a, b) => b - a);
 
       for (const overlapCount of sortedOverlapCounts) {
@@ -673,34 +739,67 @@ export default function App() {
         if (!group) continue;
 
         for (const candidate of shuffleArray(group)) {
-          assignedCandidates.push(candidate);
-          if (assignedCandidates.length === 3) {
+          appendRecipientIfUnselected(selectedRecipients, {
+            uid: candidate.uid,
+            gender: candidate.gender,
+            interests: candidate.interests || [],
+            matchOverlapCount: overlapCount,
+            matchSelectionType: 'matched',
+            matchCategoriesSnapshot: [...inferredCategories],
+          });
+
+          if (selectedRecipients.length === 3) {
             break;
           }
         }
 
-        if (assignedCandidates.length === 3) {
+        if (selectedRecipients.length === 3) {
           break;
         }
       }
 
-      if (assignedCandidates.length < 3) {
-        console.log(`Only found ${assignedCandidates.length} matching humans. Adding AI bots...`);
-        const needed = 3 - assignedCandidates.length;
-        const aiBots = AI_BOT_PROFILES
-          .slice(0, needed)
-          .map(bot => ({ ...bot, interests: inferredCategories }));
-        assignedCandidates.push(...aiBots);
+      const matchedSelectedCount = selectedRecipients.length;
+
+      if (matchedSelectedCount < 3) {
+        appendRecipientIfUnselected(
+          selectedRecipients,
+          getNextUnselectedAiRecipient(selectedRecipients, 'ai', inferredCategories)
+        );
+
+        const fallbackHumanSlots =
+          matchedSelectedCount === 1
+            ? 1
+            : matchedSelectedCount === 0
+              ? 2
+              : 0;
+
+        const randomFallbackHumans = takeRandomUnselectedHumans(
+          allHumanUsers,
+          selectedRecipients,
+          fallbackHumanSlots,
+          inferredCategories
+        );
+
+        for (const recipient of randomFallbackHumans) {
+          appendRecipientIfUnselected(selectedRecipients, recipient);
+        }
+
+        while (selectedRecipients.length < 3) {
+          appendRecipientIfUnselected(
+            selectedRecipients,
+            getNextUnselectedAiRecipient(selectedRecipients, 'ai_safety_fallback', inferredCategories)
+          );
+        }
       }
 
-      const assignedIds = assignedCandidates.map(c => c.uid);
+      const assignedIds = selectedRecipients.map(candidate => candidate.uid);
       const publicationGroupId = doc(collection(db, 'letters')).id;
       console.log("Assigned Recipients:", assignedIds);
 
       // Step 3: Save to Firestore
       // Use a simpler map without waiting for individual AI generations inside Promise.all
-      await Promise.all(assignedCandidates.map(async (candidate) => {
-        const receiverId = candidate.uid;
+      await Promise.all(selectedRecipients.map(async (recipient) => {
+        const receiverId = recipient.uid;
         
         // 1. Save the Worry (This is the only part we MUST wait for)
         const worryRef = await addDoc(collection(db, 'letters'), {
@@ -712,6 +811,9 @@ export default function App() {
           categories: inferredCategories,
           category: inferredCategories[0],
           publicationGroupId,
+          matchOverlapCount: recipient.matchOverlapCount,
+          matchSelectionType: recipient.matchSelectionType,
+          matchCategoriesSnapshot: [...recipient.matchCategoriesSnapshot],
           createdAt: serverTimestamp(),
           isRead: false
         });
@@ -722,7 +824,7 @@ export default function App() {
           (async () => {
             try {
               console.log(`[Background] Generating AI reply for ${receiverId}...`);
-              const aiResponse = await generateAIReply(content, candidate);
+              const aiResponse = await generateAIReply(content, recipient);
               const replyText = aiResponse.content || "당신의 고민을 잘 읽었어요. 마음이 따뜻해지는 밤 되시길 바랄게요.";
 
               await addDoc(collection(db, 'letters'), {
