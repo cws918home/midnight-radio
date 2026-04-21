@@ -1272,8 +1272,8 @@ export default function App() {
                               <p className="text-[#5A5A40] font-medium line-clamp-2 leading-relaxed">
                                 {reply.refinedContent}
                               </p>
-                              {reply.publisherComment && (
-                                <div className="mt-3 text-xs text-[#E07A5F] font-bold">새로운 코멘트 도착!</div>
+                              {!reply.publisherComment && (
+                                <div className="mt-3 text-xs text-[#E07A5F] font-bold">코멘트를 남겨주세요!</div>
                               )}
                             </button>
                           ))}
@@ -1301,11 +1301,15 @@ export default function App() {
                               <div className="flex items-center gap-2 mb-3">
                                 <Send className="w-4 h-4 text-[#A3B18A]" />
                                 <span className="text-xs font-semibold text-[#8B8B6B]">나의 다정한 위로</span>
-                                {reply.feedback === 'helpful' && <Heart className="w-4 h-4 text-[#E07A5F] ml-auto" />}
                               </div>
                               <p className="text-[#5A5A40] font-medium line-clamp-2 leading-relaxed">
                                 {reply.refinedContent}
                               </p>
+                              {reply.feedback === 'helpful' ? (
+                                <div className="mt-3 text-xs text-[#E07A5F] font-bold">
+                                  {reply.publisherComment ? '답장이 왔어요!' : '따뜻한 한 마디 감사해요!'}
+                                </div>
+                              ) : null}
                               {reply.publisherComment && (
                                 <div className="mt-3 bg-[#FAEDCD]/50 p-2 rounded text-xs text-[#5A5A40]">
                                   <strong>답장받은 분의 코멘트:</strong> {reply.publisherComment}
