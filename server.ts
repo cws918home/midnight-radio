@@ -41,6 +41,66 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
 
 const db = getApps().length > 0 ? getFirestore(firestoreDatabaseId) : null;
 const messaging = getApps().length > 0 ? getMessaging() : null;
+const WORRY_CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래'] as const;
+const WORRY_CATEGORY_SET = new Set<string>(WORRY_CATEGORIES);
+
+function normalizeWorryCategories(rawCategories: unknown): string[] {
+  const values = Array.isArray(rawCategories)
+    ? rawCategories
+    : typeof rawCategories === 'string'
+      ? rawCategories.split(',')
+      : [];
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed) || !WORRY_CATEGORY_SET.has(trimmed)) {
+      continue;
+    }
+
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+}
+
+async function moderateAndInferWorryCategories(content: string, strictRetry = false) {
+  const systemInstruction = `You are a moderator and category inference engine for a Korean anonymous worry-sharing app.
+Use ONLY this fixed category vocabulary:
+${WORRY_CATEGORIES.join(', ')}
+
+Rules:
+1. If the text is inappropriate, abusive, violent, sexually explicit, hateful, or spammy, return exactly:
+{ "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
+2. If appropriate, infer 1 or more categories from the fixed vocabulary above.
+3. Never fabricate labels outside the fixed vocabulary.
+4. Return JSON only.
+5. Approved shape must be exactly:
+{ "status": "approved", "categories": ["카테고리1", "카테고리2"] }
+${strictRetry ? '6. This is a retry because the previous answer had invalid or empty categories. Be strict: return only exact vocabulary labels, trimmed, with no explanation.' : ''}`;
+
+  const resultObj = await fetchFromOpenRouter(systemInstruction, content);
+
+  if (resultObj.status === 'rejected') {
+    return resultObj;
+  }
+
+  const rawCategories =
+    resultObj.categories ??
+    (typeof resultObj.category === 'string' ? [resultObj.category] : resultObj.category);
+  const normalizedCategories = normalizeWorryCategories(rawCategories);
+
+  if (resultObj.status === 'approved' && normalizedCategories.length > 0) {
+    return { status: 'approved', categories: normalizedCategories };
+  }
+
+  return { status: 'invalid' as const };
+}
 
 async function sendPushNotification(uid: string, title: string, body: string) {
   if (!db || !messaging) {
@@ -143,7 +203,7 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
       console.error("JSON Parse Error. Raw content:", textContent);
       // Fallback response if JSON parsing fails
       if (textContent.includes("approved")) {
-        return { status: "approved", assignedUids: [] };
+        return { status: "approved" };
       }
       return { status: "error", reason: "응답 해석 실패" };
     }
@@ -159,39 +219,39 @@ async function startServer() {
 
   app.use(express.json());
 
-  // API Route for Processing Worries (Filtering + LLM Routing)
+  // API Route for Processing Worries (Filtering + Category Inference)
   app.post("/api/process-worry", async (req, res) => {
     try {
-      const { content, candidates, senderInfo } = req.body;
+      const { content } = req.body;
 
-      const systemInstruction = `You are an AI moderator and routing engine for a Korean anonymous worry-sharing app.
-1. Check for inappropriate content. If bad, return: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
-2. If appropriate, select EXACTLY 3 best-matching users from the 'Candidate List'.
-   - MATCHING RULE: Prioritize candidates who share the most interests with the sender.
-   - MANDATORY: YOU MUST RETURN EXACTLY 3 UIDs. DO NOT RETURN AN EMPTY LIST.
-   - If there are fewer than 3 candidates, return all of them.
-   - If match quality is low, pick the best available ones anyway. 
-   - AI bots (uids starting with 'bot_') are perfect matches if they share interests.
-3. RETURN JSON: { "status": "approved", "assignedUids": ["uid1", "uid2", "uid3"] }
-
-Sender Info (JSON):
-${JSON.stringify(senderInfo)}
-
-Candidate List (JSON):
-${JSON.stringify(candidates)}
-`;
-
-      const resultObj = await fetchFromOpenRouter(systemInstruction, content);
-      
-      // Safety check: ensure assignedUids exists
-      if (resultObj.status === "approved" && !resultObj.assignedUids) {
-        console.warn("LLM returned approved but missing assignedUids. Attempting to fix...");
-        // Look for other possible field names or just take first 3 from candidates
-        const candidatesList = candidates || [];
-        resultObj.assignedUids = candidatesList.slice(0, 3).map((c: any) => c.uid);
+      if (typeof content !== 'string' || !content.trim()) {
+        res.status(400).json({ status: "rejected", reason: "고민 내용이 비어 있습니다." });
+        return;
       }
-      
-      res.json(resultObj);
+
+      const firstAttempt = await moderateAndInferWorryCategories(content);
+      if (firstAttempt.status === 'rejected') {
+        res.json(firstAttempt);
+        return;
+      }
+
+      if (firstAttempt.status === 'approved') {
+        res.json(firstAttempt);
+        return;
+      }
+
+      const secondAttempt = await moderateAndInferWorryCategories(content, true);
+      if (secondAttempt.status === 'approved') {
+        res.json(secondAttempt);
+        return;
+      }
+
+      if (secondAttempt.status === 'rejected') {
+        res.json(secondAttempt);
+        return;
+      }
+
+      res.json({ status: "rejected", reason: "카테고리를 결정하지 못했습니다. 잠시 후 다시 시도해주세요." });
     } catch (error: any) {
       console.error("Backend API Error:", error?.message || error);
       res.status(500).json({ error: "Internal Server Error" });

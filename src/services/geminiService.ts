@@ -1,15 +1,19 @@
-export async function processWorry(content: string, candidates: any[], senderInfo: any): Promise<any> {
+type ProcessWorryResult =
+  | { status: "approved"; categories: string[] }
+  | { status: "rejected" | "error"; reason: string };
+
+export async function processWorry(content: string): Promise<ProcessWorryResult> {
   try {
     const response = await fetch('/api/process-worry', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, candidates, senderInfo })
+      body: JSON.stringify({ content })
     });
     if (!response.ok) throw new Error("Failed to process worry");
     return await response.json();
   } catch (error) {
     console.error("Backend LLM API Error:", error);
-    return { status: "error", reason: "부적절한 표현이 감지되었습니다." };
+    return { status: "error", reason: "고민을 분류하지 못했습니다. 잠시 후 다시 시도해주세요." };
   }
 }
 

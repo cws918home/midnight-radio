@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { 
   onAuthStateChanged, 
   signInWithPopup,
@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
-import { processReply, generateAIReply, processComment } from './services/geminiService';
+import { processWorry, processReply, generateAIReply, processComment } from './services/geminiService';
 
 // --- Constants ---
 const CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래'];
@@ -65,6 +65,7 @@ interface Letter {
   feedback?: 'helpful' | 'not_helpful' | null;
   publisherComment?: string;
   publicationGroupId?: string;
+  isAiGenerated?: boolean;
 }
 
 interface SentPublicationGroup {
@@ -77,12 +78,29 @@ interface SentPublicationGroup {
 }
 
 const LEGACY_PUBLICATION_WINDOW_MS = 15_000;
+const AI_BOT_PROFILES = [
+  { uid: 'bot_empathy', gender: 'female', interests: [] as string[] },
+  { uid: 'bot_logic', gender: 'male', interests: [] as string[] },
+  { uid: 'bot_friend', gender: 'hidden', interests: [] as string[] }
+] as const;
 
 const getLetterCategories = (letter: Letter) =>
   (letter.categories ?? (letter.category ? [letter.category] : [])).filter(Boolean) as string[];
 
+const isAiGeneratedReply = (letter: Pick<Letter, 'senderId' | 'isAiGenerated'>) =>
+  letter.isAiGenerated === true || letter.senderId.startsWith('bot_');
+
 const getTimestampMillis = (timestamp?: Timestamp | null) =>
   timestamp && typeof timestamp.toMillis === 'function' ? timestamp.toMillis() : null;
+
+const shuffleArray = <T,>(items: T[]) => {
+  const shuffled = [...items];
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
 
 const buildLegacyPublicationFingerprint = (letter: Letter) => {
   const normalizedCategories = [...getLetterCategories(letter)].sort().join('|');
@@ -602,7 +620,7 @@ export default function App() {
   const [filterAlert, setFilterAlert] = useState<string | null>(null);
 
   // 1. Publish Worry -> Filter Check then Local Matching
-  const publishWorry = async (content: string, selectedCategories: string[]) => {
+  const publishWorry = async (content: string) => {
     if (!user || !profile) {
       setFilterAlert("로그인 정보가 없습니다.");
       return;
@@ -611,57 +629,68 @@ export default function App() {
     try {
       console.log("Starting worry publication process (Optimized)...");
 
-      // Step 1 & 2 in PARALLEL: LLM Filter + Fetch Active Users
+      // Step 1 & 2 in PARALLEL: worry moderation/category inference + fetch active users
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
       
-      const [filterResult, usersSnap] = await Promise.all([
-        processReply(content), // LLM Check
-        getDocs(query(         // DB Fetch
+      const [worryResult, usersSnap] = await Promise.all([
+        processWorry(content),
+        getDocs(query(
           collection(db, 'users'), 
           where('lastActive', '>=', Timestamp.fromDate(oneDayAgo)),
           limit(50)
         ))
       ]);
 
-      if (filterResult.status === 'rejected') {
-        setFilterAlert(filterResult.reason || "부적절한 표현이 감지되었습니다.");
+      if (worryResult.status !== 'approved') {
+        setFilterAlert(worryResult.reason || "고민을 전송하지 못했습니다.");
         setIsProcessing(false);
         return;
       }
 
+      const inferredCategories = worryResult.categories;
       const allHumanUsers = usersSnap.docs
         .map(d => d.data() as UserProfile)
         .filter(u => u.uid !== user.uid);
 
       console.log(`Matching from ${allHumanUsers.length} active users.`);
 
-      // B. Calculate Intersection Score
-      const scoredHumans = allHumanUsers.map(u => {
-        const userInterests = u.interests || [];
-        const intersection = userInterests.filter(i => (selectedCategories || []).includes(i));
-        return { ...u, score: intersection.length };
-      });
+      const humansByOverlap = new Map<number, UserProfile[]>();
+      for (const human of allHumanUsers) {
+        const userInterests = human.interests || [];
+        const overlapCount = userInterests.filter(interest => inferredCategories.includes(interest)).length;
+        if (overlapCount <= 0) continue;
 
-      // C. Get humans with at least one matching interest (score > 0), sorted by score
-      const matchingHumans = scoredHumans
-        .filter(h => h.score > 0)
-        .sort((a, b) => b.score - a.score);
+        const group = humansByOverlap.get(overlapCount) ?? [];
+        group.push(human);
+        humansByOverlap.set(overlapCount, group);
+      }
 
-      // D. Final Assigned IDs Logic
-      // - First, take matching humans (up to 3)
-      // - If fewer than 3, fill the rest with AI bots
-      let assignedCandidates: (UserProfile | any)[] = matchingHumans.slice(0, 3);
-      
+      const assignedCandidates: Array<UserProfile | { uid: string; gender: string; interests: string[] }> = [];
+      const sortedOverlapCounts = [...humansByOverlap.keys()].sort((a, b) => b - a);
+
+      for (const overlapCount of sortedOverlapCounts) {
+        const group = humansByOverlap.get(overlapCount);
+        if (!group) continue;
+
+        for (const candidate of shuffleArray(group)) {
+          assignedCandidates.push(candidate);
+          if (assignedCandidates.length === 3) {
+            break;
+          }
+        }
+
+        if (assignedCandidates.length === 3) {
+          break;
+        }
+      }
+
       if (assignedCandidates.length < 3) {
         console.log(`Only found ${assignedCandidates.length} matching humans. Adding AI bots...`);
         const needed = 3 - assignedCandidates.length;
-        const aiBots = [
-          { uid: 'bot_empathy', gender: 'female', interests: selectedCategories || [] },
-          { uid: 'bot_logic', gender: 'male', interests: selectedCategories || [] },
-          { uid: 'bot_friend', gender: 'hidden', interests: selectedCategories || [] }
-        ];
-        // Combine and ensure we have 3 unique ones
-        assignedCandidates = [...assignedCandidates, ...aiBots.slice(0, needed)];
+        const aiBots = AI_BOT_PROFILES
+          .slice(0, needed)
+          .map(bot => ({ ...bot, interests: inferredCategories }));
+        assignedCandidates.push(...aiBots);
       }
 
       const assignedIds = assignedCandidates.map(c => c.uid);
@@ -680,8 +709,8 @@ export default function App() {
           originalContent: content,
           refinedContent: content, 
           type: 'worry',
-          categories: selectedCategories,
-          category: selectedCategories[0],
+          categories: inferredCategories,
+          category: inferredCategories[0],
           publicationGroupId,
           createdAt: serverTimestamp(),
           isRead: false
@@ -706,7 +735,8 @@ export default function App() {
                 replyToContent: content,
                 createdAt: serverTimestamp(),
                 isRead: false,
-                feedback: null
+                feedback: null,
+                isAiGenerated: true
               });
               console.log(`[Background] AI reply from ${receiverId} saved.`);
 
@@ -802,6 +832,10 @@ export default function App() {
       setSelectedReply(prev => prev ? { ...prev, feedback: feedbackType } : null);
 
       if (feedbackType === 'helpful' && selectedReply) {
+        if (isAiGeneratedReply(selectedReply)) {
+          return;
+        }
+
         // Increment helpedCount for the replier
         const replierRef = doc(db, 'users', selectedReply.senderId);
         const replierSnap = await getDoc(replierRef);
@@ -815,7 +849,7 @@ export default function App() {
     }
   };
 
-  const deleteLetter = async (e: React.MouseEvent, letterId: string) => {
+  const deleteLetter = async (e: ReactMouseEvent, letterId: string) => {
     e.stopPropagation(); // Prevent opening the letter view
     if (!confirm("이 메시지를 삭제하시겠습니까?")) return;
     try {
@@ -1167,7 +1201,7 @@ export default function App() {
               <h2 className="text-2xl font-serif font-bold mb-2">당신의 이야기를 들려주세요</h2>
               <p className="text-[#8B8B6B] mb-8">마음 한구석에 담아둔 고민을 적어보세요. AI 안심 필터가 내용을 확인한 뒤, 가장 따뜻한 답변을 줄 수 있는 이웃에게 사연을 전달합니다.</p>
               
-              <WriteForm type="worry" isProcessing={isProcessing} onSubmit={(content, cats) => publishWorry(content, cats!)} />
+              <WriteForm type="worry" isProcessing={isProcessing} onSubmit={publishWorry} />
             </motion.div>
           )}
 
@@ -1227,9 +1261,7 @@ export default function App() {
                             >
                               <div className="flex items-center gap-2 mb-3">
                                 <Headphones className={cn("w-4 h-4", reply.isRead ? "text-[#A3B18A]" : "text-[#E07A5F]")} />
-                                <span className="text-xs font-semibold text-[#8B8B6B]">
-                                  {reply.senderId.startsWith('bot_') ? 'AI 위로 메신저' : '누군가의 따뜻한 답장'}
-                                </span>
+                                <span className="text-xs font-semibold text-[#8B8B6B]">누군가의 따뜻한 답장</span>
                                 {!reply.isRead && <span className="ml-auto w-2 h-2 bg-[#E07A5F] rounded-full" />}
                               </div>
                               <p className="text-[#5A5A40] font-medium line-clamp-2 leading-relaxed">
@@ -1504,43 +1536,15 @@ function OnboardingForm({ onSubmit, isProcessing, initialGender = '', initialInt
   );
 }
 
-function WriteForm({ type, isProcessing, onSubmit }: { type: 'worry'|'reply', isProcessing: boolean, onSubmit: (content: string, categories?: string[]) => void }) {
+function WriteForm({ type, isProcessing, onSubmit }: { type: 'worry'|'reply', isProcessing: boolean, onSubmit: (content: string) => void }) {
   const [content, setContent] = useState('');
-  const [categories, setCategories] = useState<string[]>([]);
-
-  const toggleCategory = (cat: string) => {
-    if (categories.includes(cat)) {
-      setCategories(categories.filter(c => c !== cat));
-    } else {
-      setCategories([...categories, cat]);
-    }
-  };
 
   const charCount = content.replace(/\s/g, '').length;
   const isLengthValid = charCount >= 10;
-  const isValid = isLengthValid && (type === 'reply' || categories.length > 0);
+  const isValid = isLengthValid;
 
   return (
     <div className="space-y-6">
-      {type === 'worry' && (
-        <div className="space-y-3 mb-6">
-          <label className="font-bold text-sm text-[#5A5A40]">이 고민의 알맞은 주제를 골라주세요 (중복 선택 가능)</label>
-          <div className="flex flex-wrap gap-2">
-            {CATEGORIES.map(cat => (
-              <button 
-                key={cat} onClick={() => toggleCategory(cat)}
-                className={cn(
-                  "px-4 py-2 rounded-full border text-xs font-bold transition-all", 
-                  categories.includes(cat) ? "bg-[#D4A373] text-white border-[#D4A373]" : "bg-white text-[#8B8B6B] border-[#E9EDC9]"
-                )}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="relative">
         <textarea 
           value={content} onChange={e => setContent(e.target.value)}
@@ -1566,7 +1570,7 @@ function WriteForm({ type, isProcessing, onSubmit }: { type: 'worry'|'reply', is
 
       <button 
         disabled={!isValid || isProcessing}
-        onClick={() => onSubmit(content, type === 'worry' ? categories : undefined)}
+        onClick={() => onSubmit(content)}
         className="w-full py-4 bg-[#5A5A40] text-white rounded-xl font-bold shadow-xl hover:bg-[#4A4A30] disabled:opacity-50 transition-all flex items-center justify-center gap-3"
       >
         {isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" /> 전송 중...</> : <><Send className="w-5 h-5" /> 송출하기</>}
@@ -1577,7 +1581,7 @@ function WriteForm({ type, isProcessing, onSubmit }: { type: 'worry'|'reply', is
 
 function ArrowRightIcon() { return <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg> }
 
-function Tabs({ tabs, render }: { tabs: {id: string, label: string}[], render: (active: string) => React.ReactNode }) {
+function Tabs({ tabs, render }: { tabs: {id: string, label: string}[], render: (active: string) => ReactNode }) {
   const [active, setActive] = useState(tabs[0].id);
   
   return (
@@ -1621,14 +1625,16 @@ function CommentForm({ replyId, replierId, onCommentAdded }: { replyId: string, 
       await updateDoc(doc(db, 'letters', replyId), { publisherComment: content });
 
       // Notify the replier
-      try {
-        await fetch('/api/notify-new-comment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ receiverUid: replierId })
-        });
-      } catch (notifyErr) {
-        console.error("Notification failed", notifyErr);
+      if (!replierId.startsWith('bot_')) {
+        try {
+          await fetch('/api/notify-new-comment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ receiverUid: replierId })
+          });
+        } catch (notifyErr) {
+          console.error("Notification failed", notifyErr);
+        }
       }
 
       onCommentAdded(content);
