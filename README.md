@@ -18,3 +18,5 @@ View your app in AI Studio: https://ai.studio/apps/5b923681-2d77-477b-ae6d-a04fc
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+https://midnight-radio-dmmo.onrender.com

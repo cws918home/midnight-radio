@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
-import { processWorry, processReply, generateAIReply, processComment } from './services/geminiService';
+import { processReply, generateAIReply, processComment } from './services/geminiService';
 
 // --- Constants ---
 const CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래'];
@@ -64,7 +64,142 @@ interface Letter {
   isRead: boolean;
   feedback?: 'helpful' | 'not_helpful' | null;
   publisherComment?: string;
+  publicationGroupId?: string;
 }
+
+interface SentPublicationGroup {
+  groupKey: string;
+  publicationGroupId?: string;
+  originalContent: string;
+  categories: string[];
+  createdAt: Timestamp | null;
+  letters: Letter[];
+}
+
+const LEGACY_PUBLICATION_WINDOW_MS = 15_000;
+
+const getLetterCategories = (letter: Letter) =>
+  (letter.categories ?? (letter.category ? [letter.category] : [])).filter(Boolean) as string[];
+
+const getTimestampMillis = (timestamp?: Timestamp | null) =>
+  timestamp && typeof timestamp.toMillis === 'function' ? timestamp.toMillis() : null;
+
+const buildLegacyPublicationFingerprint = (letter: Letter) => {
+  const normalizedCategories = [...getLetterCategories(letter)].sort().join('|');
+  return [letter.senderId, letter.originalContent, normalizedCategories].join('::');
+};
+
+const buildSentPublicationGroups = (letters: Letter[]): SentPublicationGroup[] => {
+  const publicationGroups = new Map<string, SentPublicationGroup>();
+  const legacyBuckets = new Map<string, Letter[]>();
+  const singletonGroups: SentPublicationGroup[] = [];
+
+  for (const letter of letters) {
+    if (letter.publicationGroupId) {
+      const groupKey = `group:${letter.publicationGroupId}`;
+      const existingGroup = publicationGroups.get(groupKey);
+
+      if (existingGroup) {
+        existingGroup.letters.push(letter);
+
+        const existingMillis = getTimestampMillis(existingGroup.createdAt);
+        const nextMillis = getTimestampMillis(letter.createdAt);
+        if (nextMillis !== null && (existingMillis === null || nextMillis > existingMillis)) {
+          existingGroup.createdAt = letter.createdAt;
+        }
+      } else {
+        publicationGroups.set(groupKey, {
+          groupKey,
+          publicationGroupId: letter.publicationGroupId,
+          originalContent: letter.originalContent,
+          categories: getLetterCategories(letter),
+          createdAt: letter.createdAt,
+          letters: [letter],
+        });
+      }
+      continue;
+    }
+
+    const createdAtMillis = getTimestampMillis(letter.createdAt);
+    if (createdAtMillis === null) {
+      singletonGroups.push({
+        groupKey: `legacy-single:${letter.id}`,
+        originalContent: letter.originalContent,
+        categories: getLetterCategories(letter),
+        createdAt: letter.createdAt ?? null,
+        letters: [letter],
+      });
+      continue;
+    }
+
+    const fingerprint = buildLegacyPublicationFingerprint(letter);
+    const bucket = legacyBuckets.get(fingerprint) ?? [];
+    bucket.push(letter);
+    legacyBuckets.set(fingerprint, bucket);
+  }
+
+  const legacyGroups: SentPublicationGroup[] = [];
+
+  for (const [fingerprint, bucket] of legacyBuckets) {
+    bucket.sort((a, b) => (getTimestampMillis(a.createdAt) ?? 0) - (getTimestampMillis(b.createdAt) ?? 0));
+
+    let anchorCreatedAtMillis: number | null = null;
+    let cluster: Letter[] = [];
+
+    const flushCluster = () => {
+      if (cluster.length === 0 || anchorCreatedAtMillis === null) return;
+
+      const latestLetter = cluster[cluster.length - 1];
+      legacyGroups.push({
+        groupKey: `legacy:${fingerprint}:${anchorCreatedAtMillis}`,
+        originalContent: cluster[0].originalContent,
+        categories: getLetterCategories(cluster[0]),
+        createdAt: latestLetter.createdAt,
+        letters: [...cluster],
+      });
+
+      cluster = [];
+      anchorCreatedAtMillis = null;
+    };
+
+    for (const letter of bucket) {
+      const createdAtMillis = getTimestampMillis(letter.createdAt);
+
+      if (createdAtMillis === null) {
+        flushCluster();
+        singletonGroups.push({
+          groupKey: `legacy-single:${letter.id}`,
+          originalContent: letter.originalContent,
+          categories: getLetterCategories(letter),
+          createdAt: letter.createdAt ?? null,
+          letters: [letter],
+        });
+        continue;
+      }
+
+      if (anchorCreatedAtMillis === null) {
+        anchorCreatedAtMillis = createdAtMillis;
+        cluster = [letter];
+        continue;
+      }
+
+      if (createdAtMillis - anchorCreatedAtMillis <= LEGACY_PUBLICATION_WINDOW_MS) {
+        cluster.push(letter);
+        continue;
+      }
+
+      flushCluster();
+      anchorCreatedAtMillis = createdAtMillis;
+      cluster = [letter];
+    }
+
+    flushCluster();
+  }
+
+  return [...publicationGroups.values(), ...legacyGroups, ...singletonGroups].sort((a, b) => {
+    return (getTimestampMillis(b.createdAt) ?? 0) - (getTimestampMillis(a.createdAt) ?? 0);
+  });
+};
 
 // --- App Component ---
 export default function App() {
@@ -530,6 +665,7 @@ export default function App() {
       }
 
       const assignedIds = assignedCandidates.map(c => c.uid);
+      const publicationGroupId = doc(collection(db, 'letters')).id;
       console.log("Assigned Recipients:", assignedIds);
 
       // Step 3: Save to Firestore
@@ -546,6 +682,7 @@ export default function App() {
           type: 'worry',
           categories: selectedCategories,
           category: selectedCategories[0],
+          publicationGroupId,
           createdAt: serverTimestamp(),
           isRead: false
         });
@@ -691,6 +828,7 @@ export default function App() {
   };
 
   const unreadRepliesCount = inboxReplies.filter(r => !r.isRead).length;
+  const groupedMyWorries = buildSentPublicationGroups(myWorries);
 
   if (loading) {
     return <div className="min-h-screen bg-[#FDFCF8] flex items-center justify-center"><Loader2 className="w-8 h-8 text-[#D4A373] animate-spin" /></div>;
@@ -1062,7 +1200,7 @@ export default function App() {
                 tabs={[
                   { id: 'received', label: `받은 답장 (${inboxReplies.length})` },
                   { id: 'given', label: `내가 한 위로 (${myGivenReplies.length})` },
-                  { id: 'sent', label: `내 고민 내역 (${myWorries.length})` }
+                  { id: 'sent', label: `내 고민 내역 (${groupedMyWorries.length})` }
                 ]}
                 render={(activeTab) => (
                   <div className="mt-6">
@@ -1143,26 +1281,23 @@ export default function App() {
                     )}
 
                     {activeTab === 'sent' && (
-                      myWorries.length === 0 ? (
+                      groupedMyWorries.length === 0 ? (
                         <div className="text-center py-16 bg-white/50 rounded-3xl border border-dashed border-[#E9EDC9]">
                           <FileText className="w-12 h-12 text-[#E9EDC9] mx-auto mb-3" />
                           <p className="text-[#8B8B6B]">아직 송출한 고민이 없어요.</p>
                         </div>
                       ) : (
                         <div className="grid gap-4">
-                          {myWorries.map(worry => (
-                            <div key={worry.id} className="w-full text-left p-6 bg-white rounded-2xl border border-[#E9EDC9] relative group">
+                          {groupedMyWorries.map((worryGroup) => (
+                            <div key={worryGroup.groupKey} className="w-full text-left p-6 bg-white rounded-2xl border border-[#E9EDC9] relative group">
                               <div className="flex items-center gap-2 mb-3">
                                 <Signal className="w-4 h-4 text-[#D4A373]" />
-                                <span className="text-xs font-semibold text-[#8B8B6B]">
-                                  수신인: {worry.receiverId === 'public' ? '모든 이용자' : (worry.receiverId.startsWith('bot_') ? 'AI 답변자' : '익명 이용자')}
-                                </span>
-                                <span className="ml-auto text-[10px] font-bold text-[#8B8B6B]">
-                                  {(worry.categories || [worry.category]).join(', ')}
+                                <span className="text-[10px] font-bold text-[#8B8B6B]">
+                                  {worryGroup.categories.join(', ') || '기타'}
                                 </span>
                               </div>
                               <p className="text-[#5A5A40] font-medium line-clamp-2 leading-relaxed italic">
-                                "{worry.originalContent}"
+                                "{worryGroup.originalContent}"
                               </p>
                             </div>
                           ))}
@@ -1465,8 +1600,6 @@ function Tabs({ tabs, render }: { tabs: {id: string, label: string}[], render: (
     </div>
   );
 }
-
-import { processComment } from './services/geminiService';
 
 function CommentForm({ replyId, replierId, onCommentAdded }: { replyId: string, replierId: string, onCommentAdded: (c: string) => void }) {
   const [content, setContent] = useState('');
