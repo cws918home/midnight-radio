@@ -26,7 +26,7 @@ import { getToken, onMessage, deleteToken } from 'firebase/messaging';
 import { auth, db, googleProvider, messaging } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, Trash2, FileText, Bell, Share2, QrCode
+  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, FileText, Bell, Share2, QrCode
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
@@ -984,12 +984,6 @@ export default function App() {
                 <div className="grid gap-6">
                   {feedWorries.map(worry => (
                     <div key={worry.id} className="bg-white p-6 rounded-2xl shadow-sm border border-[#FAEDCD] relative group">
-                      <button 
-                        onClick={(e) => deleteLetter(e, worry.id)}
-                        className="absolute top-4 right-4 p-2 text-[#8B8B6B] opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
                       <div className="flex items-center gap-2 mb-4">
                         <span className="px-2.5 py-1 bg-[#FAEDCD] text-[#D4A373] text-[10px] font-bold rounded-lg border border-[#E9EDC9]">
                           {worry.category || '기타'}
@@ -1093,12 +1087,6 @@ export default function App() {
                                 reply.isRead ? "bg-white border-[#E9EDC9]" : "bg-[#FAEDCD] border-[#D4A373] shadow-md"
                               )}
                             >
-                              <button 
-                                onClick={(e) => deleteLetter(e, reply.id)}
-                                className="absolute top-4 right-4 p-2 text-[#8B8B6B] opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
                               <div className="flex items-center gap-2 mb-3">
                                 <Headphones className={cn("w-4 h-4", reply.isRead ? "text-[#A3B18A]" : "text-[#E07A5F]")} />
                                 <span className="text-xs font-semibold text-[#8B8B6B]">
@@ -1135,12 +1123,6 @@ export default function App() {
                               }}
                               className="w-full text-left p-6 bg-white rounded-2xl border border-[#E9EDC9] transition-all hover:bg-[#FAEDCD] relative group"
                             >
-                              <button 
-                                onClick={(e) => deleteLetter(e, reply.id)}
-                                className="absolute top-4 right-4 p-2 text-[#8B8B6B] opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
                               <div className="flex items-center gap-2 mb-3">
                                 <Send className="w-4 h-4 text-[#A3B18A]" />
                                 <span className="text-xs font-semibold text-[#8B8B6B]">나의 다정한 위로</span>
@@ -1170,12 +1152,6 @@ export default function App() {
                         <div className="grid gap-4">
                           {myWorries.map(worry => (
                             <div key={worry.id} className="w-full text-left p-6 bg-white rounded-2xl border border-[#E9EDC9] relative group">
-                              <button 
-                                onClick={(e) => deleteLetter(e, worry.id)}
-                                className="absolute top-4 right-4 p-2 text-[#8B8B6B] opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
                               <div className="flex items-center gap-2 mb-3">
                                 <Signal className="w-4 h-4 text-[#D4A373]" />
                                 <span className="text-xs font-semibold text-[#8B8B6B]">
