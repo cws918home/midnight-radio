@@ -1157,7 +1157,7 @@ export default function App() {
                                 <span className="text-xs font-semibold text-[#8B8B6B]">
                                   수신인: {worry.receiverId === 'public' ? '모든 이용자' : (worry.receiverId.startsWith('bot_') ? 'AI 답변자' : '익명 이용자')}
                                 </span>
-                                <span className="ml-auto text-[10px] text-[#E9EDC9] font-bold bg-[#FAEDCD] px-2 py-0.5 rounded-full">
+                                <span className="ml-auto text-[10px] font-bold text-[#8B8B6B]">
                                   {(worry.categories || [worry.category]).join(', ')}
                                 </span>
                               </div>
