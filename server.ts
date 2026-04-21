@@ -74,15 +74,31 @@ async function moderateAndInferWorryCategories(content: string, strictRetry = fa
 Use ONLY this fixed category vocabulary:
 ${WORRY_CATEGORIES.join(', ')}
 
-Rules:
-1. If the text is inappropriate, abusive, violent, sexually explicit, hateful, or spammy, return exactly:
-{ "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
-2. If appropriate, infer 1 or more categories from the fixed vocabulary above. Zero is not allowed. It is acceptable to be flexible when selecting additional categories.
-3. Never fabricate labels outside the fixed vocabulary.
-4. Return JSON only.
-5. Approved shape must be exactly:
-{ "status": "approved", "categories": ["카테고리1", "카테고리2"] }
-${strictRetry ? '6. This is a retry because the previous answer had invalid or empty categories. Be strict: return only exact vocabulary labels, trimmed, with no explanation. If there is no fitting category, you are allowed to select "잡답" as fallback' : ''}`;
+Decision policy:
+1. Reject ONLY when the text itself is inappropriate, abusive, violent, sexually explicit, hateful, or obvious spam.
+   In that case, return exactly:
+   { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
+
+2. Otherwise, the text is considered acceptable and MUST be approved.
+
+3. For approved text, you MUST return at least one category from the fixed vocabulary above.
+   NEVER return zero categories.
+
+4. If the text is acceptable but category inference is uncertain, ambiguous, too broad, too casual, or does not strongly fit any specific category, choose exactly:
+   ["잡담"]
+   as the fallback.
+
+5. Never fabricate labels outside the fixed vocabulary.
+6. Never include explanations, markdown, or extra text.
+7. Return JSON only.
+8. Approved shape must be exactly:
+   { "status": "approved", "categories": ["카테고리1", "카테고리2", "카테고리3"] }
+9. Categories must be exact vocabulary matches, trimmed, and deduplicated.
+${strictRetry ? '10. This is a retry because the previous answer had invalid JSON or invalid/empty categories.\
+    Do not explain.\
+    Do not reject unless the text is clearly unsafe by Rule 1.\
+    If the text is safe and you are uncertain about the best category, return exactly:\
+    { "status": "approved", "categories": ["잡담"] }' : ''}`;
 
   const resultObj = await fetchFromOpenRouter(systemInstruction, content);
 
@@ -101,6 +117,7 @@ ${strictRetry ? '6. This is a retry because the previous answer had invalid or e
       : ('category' in resultObj ? resultObj.category : undefined));
   const normalizedCategories = normalizeWorryCategories(rawCategories);
 
+  // Malformed or unusable model output stays on the invalid/category-failure path.
   if ('status' in resultObj && resultObj.status === 'approved' && normalizedCategories.length > 0) {
     return { status: 'approved', categories: normalizedCategories };
   }
@@ -165,53 +182,48 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
   }
 
   console.log(`Attempting to call OpenRouter with model: moonshotai/kimi-k2.5`);
+ 
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "http://localhost:3000",
+      "X-Title": "Midnight Radio"
+    },
+    body: JSON.stringify({
+      model: "moonshotai/kimi-k2.5",
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: userContent }
+      ],
+      temperature: 0.1,
+      max_tokens: 1000 // Limit tokens to stay within credit budget
+    })
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error(`OpenRouter API Error Status: ${response.status}`);
+    console.error(`OpenRouter API Error Body: ${errText}`);
+    throw new Error(`OpenRouter API Error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  console.log("Successfully received response from OpenRouter.");
+  
+  let textContent = data.choices?.[0]?.message?.content || "{}";
+  
+  // Sometimes models wrap JSON in code blocks like ```json ... ```
+  if (textContent.includes("```")) {
+    textContent = textContent.replace(/```json|```/g, "").trim();
+  }
   
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:3000",
-        "X-Title": "Midnight Radio"
-      },
-      body: JSON.stringify({
-        model: "moonshotai/kimi-k2.5",
-        messages: [
-          { role: "system", content: systemInstruction },
-          { role: "user", content: userContent }
-        ],
-        temperature: 0.1,
-        max_tokens: 1000 // Limit tokens to stay within credit budget
-      })
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`OpenRouter API Error Status: ${response.status}`);
-      console.error(`OpenRouter API Error Body: ${errText}`);
-      throw new Error(`OpenRouter API Error: ${response.status} ${errText}`);
-    }
-
-    const data = await response.json();
-    console.log("Successfully received response from OpenRouter.");
-    
-    let textContent = data.choices?.[0]?.message?.content || "{}";
-    
-    // Sometimes models wrap JSON in code blocks like ```json ... ```
-    if (textContent.includes("```")) {
-      textContent = textContent.replace(/```json|```/g, "").trim();
-    }
-    
-    try {
-      return JSON.parse(textContent);
-    } catch (parseError) {
-      console.error("JSON Parse Error. Raw content:", textContent);
-      return null;
-    }
-  } catch (error: any) {
-    console.error("Fetch operation failed:", error.message);
-    throw error;
+    return JSON.parse(textContent);
+  } catch (parseError) {
+    console.error("JSON Parse Error. Raw content:", textContent);
+    return null;
   }
 }
 
@@ -227,17 +239,18 @@ async function startServer() {
       const { content } = req.body;
 
       if (typeof content !== 'string' || !content.trim()) {
-        res.status(400).json({ status: "rejected", reason: "고민 내용이 비어 있습니다." });
+        res.json({ status: "rejected", reason: "고민 내용이 비어 있습니다." });
         return;
       }
 
       const firstAttempt = await moderateAndInferWorryCategories(content);
-      if (firstAttempt.status === 'rejected') {
+      if (firstAttempt.status === 'approved') {
         res.json(firstAttempt);
         return;
       }
 
-      if (firstAttempt.status === 'approved') {
+      if (firstAttempt.status === 'rejected') {
+        console.log("Worry processing moderation rejection.");
         res.json(firstAttempt);
         return;
       }
@@ -249,14 +262,17 @@ async function startServer() {
       }
 
       if (secondAttempt.status === 'rejected') {
+        console.log("Worry processing moderation rejection.");
         res.json(secondAttempt);
         return;
       }
 
+      console.log("Worry processing category inference failure after retries.");
       res.json({ status: "rejected", reason: "카테고리를 결정하지 못했습니다. 잠시 후 다시 시도해주세요." });
     } catch (error: any) {
-      console.error("Backend API Error:", error?.message || error);
-      res.json({ status: "rejected", reason: "고민을 분류하지 못했습니다. 잠시 후 다시 시도해주세요." });
+      // True provider/runtime exceptions are the only path to HTTP 500 system failure.
+      console.error("Worry processing backend/system exception:", error?.message || error);
+      res.status(500).json({ status: "rejected", reason: "오류가 발생했습니다. 잠시 후 다시 시도해주세요." });
     }
   });
 

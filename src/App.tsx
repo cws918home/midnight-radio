@@ -709,7 +709,7 @@ export default function App() {
       ]);
 
       if (worryResult.status !== 'approved') {
-        setFilterAlert(worryResult.reason || "고민을 전송하지 못했습니다.");
+        setFilterAlert(worryResult.reason || "오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
         setIsProcessing(false);
         return;
       }

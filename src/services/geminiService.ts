@@ -9,11 +9,16 @@ export async function processWorry(content: string): Promise<ProcessWorryResult>
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content })
     });
-    if (!response.ok) throw new Error("Failed to process worry");
+
+    if (!response.ok) {
+      console.error("processWorry HTTP error:", response.status, response.statusText);
+      return { status: "rejected", reason: "오류가 발생했습니다. 잠시 후 다시 시도해주세요." };
+    }
+
     return await response.json();
   } catch (error) {
-    console.error("Backend LLM API Error:", error);
-    return { status: "rejected", reason: "고민을 분류하지 못했습니다. 잠시 후 다시 시도해주세요." };
+    console.error("processWorry fetch exception:", error);
+    return { status: "rejected", reason: "오류가 발생했습니다. 잠시 후 다시 시도해주세요." };
   }
 }
 
