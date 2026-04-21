@@ -863,6 +863,11 @@ export default function App() {
 
   const unreadRepliesCount = inboxReplies.filter(r => !r.isRead).length;
   const groupedMyWorries = buildSentPublicationGroups(myWorries);
+  const profileInterests = profile?.interests ?? [];
+  const visibleHomeInterestBadgeText = profileInterests.slice(0, 5).join(', ');
+  const homeInterestBadgeText = profileInterests.length === 0
+    ? '관심 주제'
+    : `${visibleHomeInterestBadgeText}${profileInterests.length > 5 ? '...' : ''}`;
 
   if (loading) {
     return <div className="min-h-screen bg-[#FDFCF8] flex items-center justify-center"><Loader2 className="w-8 h-8 text-[#D4A373] animate-spin" /></div>;
@@ -1144,7 +1149,7 @@ export default function App() {
             <motion.div key="home" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-8">
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-serif font-bold">오늘 밤의 사연들</h2>
-                <span className="text-xs bg-[#E9EDC9] text-[#5A5A40] px-3 py-1 rounded-full">{profile?.interests?.join(', ') || '관심 주제'} 사연 위주</span>
+                <span className="text-xs bg-[#E9EDC9] text-[#5A5A40] px-3 py-1 rounded-full">{homeInterestBadgeText} 사연 위주</span>
               </div>
 
               {feedWorries.length === 0 ? (
