@@ -82,7 +82,7 @@ Rules:
 4. Return JSON only.
 5. Approved shape must be exactly:
 { "status": "approved", "categories": ["카테고리1", "카테고리2"] }
-${strictRetry ? '6. This is a retry because the previous answer had invalid or empty categories. Be strict: return only exact vocabulary labels, trimmed, with no explanation.' : ''}`;
+${strictRetry ? '6. This is a retry because the previous answer had invalid or empty categories. Be strict: return only exact vocabulary labels, trimmed, with no explanation. If there is no fitting category, you are allowed to select "잡답" as fallback' : ''}`;
 
   const resultObj = await fetchFromOpenRouter(systemInstruction, content);
 
