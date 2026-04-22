@@ -818,45 +818,25 @@ export default function App() {
           isRead: false
         });
 
-        // 2. Trigger AI reply in the BACKGROUND (Do NOT use 'await' here)
+        // 2. Trigger AI reply scheduling (Server-side delay)
         if (receiverId.startsWith('bot_')) {
-          // Launch as an independent async task
-          (async () => {
-            try {
-              console.log(`[Background] Generating AI reply for ${receiverId}...`);
-              const aiResponse = await generateAIReply(content, recipient);
-              const replyText = aiResponse.content || "당신의 고민을 잘 읽었어요. 마음이 따뜻해지는 밤 되시길 바랄게요.";
-
-              await addDoc(collection(db, 'letters'), {
-                senderId: receiverId, 
+          try {
+            console.log(`[Client] Scheduling AI reply for ${receiverId}...`);
+            fetch('/api/schedule-bot-reply', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                worryId: worryRef.id,
+                worryContent: content,
                 receiverId: user.uid,
-                originalContent: replyText,
-                refinedContent: replyText,
-                type: 'reply',
-                replyTo: worryRef.id,
-                replyToContent: content,
-                createdAt: serverTimestamp(),
-                isRead: false,
-                feedback: null,
-                isAiGenerated: true
-              });
-              console.log(`[Background] AI reply from ${receiverId} saved.`);
-
-              // Notify the user about the AI reply
-              try {
-                await fetch('/api/notify-new-reply', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ receiverUid: user.uid })
-                });
-              } catch (notifyErr) {
-                console.error("AI Notification failed", notifyErr);
-              }
-            } catch (botErr) {
-              console.error(`[Background] AI bot reply failed for ${receiverId}:`, botErr);
-            }
-          })(); // IIFE to run in background
+                botInfo: recipient
+              })
+            });
+          } catch (botErr) {
+            console.error(`[Client] AI bot scheduling failed for ${receiverId}:`, botErr);
+          }
         }
+
       }));
 
       // Step 4: Notify recipients via Push Notification

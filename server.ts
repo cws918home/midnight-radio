@@ -5,7 +5,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import fs from "fs";
 
@@ -370,6 +370,58 @@ Return JSON: { "content": "Your reply here" }`;
       await sendPushNotification(receiverUid, "📻 미드나잇 라디오", "남겨주신 답장에 코멘트가 달렸습니다.");
     }
     res.json({ status: "ok" });
+  });
+
+  app.post("/api/schedule-bot-reply", async (req, res) => {
+    const { worryId, worryContent, receiverId, botInfo } = req.body;
+    
+    // Send immediate response to client
+    res.json({ status: "scheduled" });
+
+    // Calculate a random delay between 4 and 8 minutes
+    const minMinutes = 4;
+    const maxMinutes = 8;
+    const delayMs = (Math.floor(Math.random() * (maxMinutes - minMinutes + 1)) + minMinutes) * 60 * 1000;
+    
+    console.log(`[Bot] Scheduling reply from ${botInfo.uid} in ${delayMs / 1000 / 60} minutes.`);
+
+    setTimeout(async () => {
+      if (!db) return;
+      try {
+        console.log(`[Bot] Generating delayed reply for ${receiverId}...`);
+        
+        const systemInstruction = `You are a warm, empathetic person who just received an anonymous worry. 
+Your persona: ${botInfo.gender === 'female' ? 'A kind sister/older woman' : 'A supportive brother/older man'}. 
+Interests: ${botInfo.interests.join(', ')}.
+Task: Write a comforting, personal reply to the worry. Keep it between 2-4 sentences. Use a warm, polite Korean tone (해요체). 
+Do NOT use professional counselor jargon. Sound like a real person.
+Return JSON: { "content": "Your reply here" }`;
+
+        const resultObj = await fetchFromOpenRouter(systemInstruction, worryContent);
+        const replyText = resultObj?.content || "당신의 고민을 잘 읽었어요. 마음이 따뜻해지는 밤 되시길 바랄게요.";
+
+        // Save reply to Firestore
+        await db.collection('letters').add({
+          senderId: botInfo.uid,
+          receiverId: receiverId,
+          originalContent: replyText,
+          refinedContent: replyText,
+          type: 'reply',
+          replyTo: worryId,
+          replyToContent: worryContent,
+          createdAt: FieldValue.serverTimestamp(),
+          isRead: false,
+          feedback: null
+        });
+
+        console.log(`[Bot] Delayed reply from ${botInfo.uid} saved.`);
+
+        // Notify the user
+        await sendPushNotification(receiverId, "📻 미드나잇 라디오", "보낸 사연에 답장이 도착했습니다.");
+      } catch (err) {
+        console.error(`[Bot] Delayed reply failed for ${botInfo.uid}:`, err);
+      }
+    }, delayMs);
   });
 
   // Vite middleware for development
