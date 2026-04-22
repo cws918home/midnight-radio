@@ -352,6 +352,27 @@ const getServiceWorkerScriptUrl = (registration?: ServiceWorkerRegistration | nu
 const isFallbackMessagingRegistration = (registration?: ServiceWorkerRegistration | null) =>
   getServiceWorkerScriptUrl(registration).includes(FALLBACK_MESSAGING_SW_URL);
 
+const getTokenPreview = (token?: string | null) => token?.slice(0, 12) ?? null;
+
+const getServiceWorkerRegistrationLogPayload = ({
+  registration,
+  registrationType,
+  installedPWA,
+}: {
+  registration?: ServiceWorkerRegistration | null;
+  registrationType: 'app-controlled' | 'fallback';
+  installedPWA: boolean;
+}) => ({
+  registrationType,
+  scope: registration?.scope ?? null,
+  scriptURL: getServiceWorkerScriptUrl(registration),
+  hasActive: Boolean(registration?.active),
+  hasWaiting: Boolean(registration?.waiting),
+  hasInstalling: Boolean(registration?.installing),
+  isFallbackRegistration: isFallbackMessagingRegistration(registration),
+  isInstalledPWA: installedPWA,
+});
+
 const getDefaultStoredPushMetadata = (): StoredPushMetadata => ({
   instanceId: null,
   lastKnownFcmToken: null,
@@ -576,7 +597,7 @@ export default function App() {
     }
   };
 
-  const resolveMessagingRegistration = async () => {
+  const resolveMessagingRegistration = async (installedPWA: boolean) => {
     const readyRegistration = await waitForReadyServiceWorker();
     const registrations = 'serviceWorker' in navigator
       ? await navigator.serviceWorker.getRegistrations()
@@ -587,10 +608,14 @@ export default function App() {
     ].find(registration => registration?.active && !isFallbackMessagingRegistration(registration));
 
     if (appControlledRegistration) {
-      console.log('FCM: Using app-controlled service worker registration.', {
-        scriptURL: getServiceWorkerScriptUrl(appControlledRegistration),
-        isInstalledPWA: isInstalledPWA(),
-      });
+      console.log(
+        'FCM: resolveMessagingRegistration returning registration.',
+        getServiceWorkerRegistrationLogPayload({
+          registration: appControlledRegistration,
+          registrationType: 'app-controlled',
+          installedPWA,
+        })
+      );
 
       return {
         registration: appControlledRegistration,
@@ -603,11 +628,14 @@ export default function App() {
     });
     await waitForActivatedServiceWorker(fallbackRegistration);
 
-    console.log('FCM: Using fallback Firebase messaging service worker registration.', {
-      scriptURL: getServiceWorkerScriptUrl(fallbackRegistration),
-      scope: fallbackRegistration.scope,
-      isInstalledPWA: isInstalledPWA(),
-    });
+    console.log(
+      'FCM: resolveMessagingRegistration returning registration.',
+      getServiceWorkerRegistrationLogPayload({
+        registration: fallbackRegistration,
+        registrationType: 'fallback',
+        installedPWA,
+      })
+    );
 
     return {
       registration: fallbackRegistration,
@@ -676,7 +704,6 @@ export default function App() {
     const shouldAttemptRegistration = noCurrentToken || hasLocalFailure;
     const shouldConsiderFirestoreConfirmation = Boolean(
       currentToken
-      && !pushRegistrationPromiseRef.current
       && (
         !hasSuccessMarker
         || localStatus === 'failed'
@@ -719,19 +746,65 @@ export default function App() {
     assessment: PushRegistrationAssessment;
     storedMetadata: StoredPushMetadata;
   }): Promise<FirestoreConfirmationResult> => {
-    if (
-      permission !== 'granted'
-      || !confirmationUser
-      || !assessment.shouldConsiderFirestoreConfirmation
-      || !assessment.currentToken
-      || pushRegistrationPromiseRef.current
-    ) {
+    if (permission !== 'granted') {
+      console.log('FCM: confirmCurrentTokenDocIfNeeded decision skip confirmation.', {
+        uid: confirmationUser?.uid ?? null,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+        skipReason: 'permission-not-granted',
+      });
+      return 'skipped';
+    }
+
+    if (!confirmationUser) {
+      console.log('FCM: confirmCurrentTokenDocIfNeeded decision skip confirmation.', {
+        uid: null,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+        skipReason: 'no-user',
+      });
+      return 'skipped';
+    }
+
+    if (!assessment.shouldConsiderFirestoreConfirmation) {
+      console.log('FCM: confirmCurrentTokenDocIfNeeded decision skip confirmation.', {
+        uid: confirmationUser.uid,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+        skipReason: 'assessment-disallows-confirmation',
+      });
+      return 'skipped';
+    }
+
+    if (!assessment.currentToken) {
+      console.log('FCM: confirmCurrentTokenDocIfNeeded decision skip confirmation.', {
+        uid: confirmationUser.uid,
+        tokenPreview: null,
+        assessmentReason: assessment.reason,
+        skipReason: 'missing-current-token',
+      });
       return 'skipped';
     }
 
     const sessionKey = getPushTokenSessionKey(confirmationUser.uid, assessment.currentToken);
 
+    if (pushRegistrationPromiseRef.current) {
+      console.log('FCM: confirmCurrentTokenDocIfNeeded decision skip confirmation.', {
+        uid: confirmationUser.uid,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+        skipReason: 'registration-already-in-flight',
+      });
+      return 'skipped';
+    }
+
     if (pushConfirmedTokenKeysRef.current.has(sessionKey) && pushRegistrationStatus === 'registered') {
+      console.log('FCM: confirmCurrentTokenDocIfNeeded decision skip confirmation.', {
+        uid: confirmationUser.uid,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+        skipReason: 'already-confirmed-in-session',
+      });
       return 'skipped';
     }
 
@@ -739,10 +812,22 @@ export default function App() {
       storedMetadata.lastSuccessfulRegistrationAt
       && Date.now() - storedMetadata.lastSuccessfulRegistrationAt < PUSH_CONFIRMATION_COOLDOWN_MS
     ) {
+      console.log('FCM: confirmCurrentTokenDocIfNeeded decision skip confirmation.', {
+        uid: confirmationUser.uid,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+        skipReason: 'cooldown-active',
+      });
       return 'skipped';
     }
 
     try {
+      console.log('FCM: confirmCurrentTokenDocIfNeeded performing confirmation read.', {
+        uid: confirmationUser.uid,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+      });
+
       const tokenDocRef = doc(
         db,
         'users',
@@ -754,17 +839,27 @@ export default function App() {
 
       if (!tokenDocSnap.exists()) {
         setPushRegistrationStatus('missing_token_doc');
-        console.warn('FCM: Token confirmation found a missing token document.', {
+        console.warn('FCM: confirmCurrentTokenDocIfNeeded found missing_token_doc.', {
           uid: confirmationUser.uid,
-          tokenPrefix: assessment.currentToken.slice(0, 12),
+          tokenPreview: getTokenPreview(assessment.currentToken),
+          assessmentReason: assessment.reason,
         });
         return 'missing_token_doc';
       }
 
       pushConfirmedTokenKeysRef.current.add(sessionKey);
+      console.log('FCM: confirmCurrentTokenDocIfNeeded confirmed token doc.', {
+        uid: confirmationUser.uid,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+      });
       return 'confirmed';
     } catch (error) {
-      console.error('FCM: Token confirmation failed.', error);
+      console.error('FCM: confirmCurrentTokenDocIfNeeded confirmation error.', {
+        uid: confirmationUser.uid,
+        tokenPreview: getTokenPreview(assessment.currentToken),
+        assessmentReason: assessment.reason,
+      }, error);
       return 'error';
     }
   };
@@ -773,12 +868,33 @@ export default function App() {
     targetUser: FirebaseUser | null,
     reason: PushRecoveryReason
   ): Promise<PushRecoveryResult> => {
+    console.log('FCM: ensurePushRegistration enter.', {
+      uid: targetUser?.uid ?? null,
+      reason,
+      hasMessaging: Boolean(messaging),
+      notificationSupported: 'Notification' in window,
+      serviceWorkerSupported: 'serviceWorker' in navigator,
+      hasInFlightRegistration: Boolean(pushRegistrationPromiseRef.current),
+    });
+
+    const logFinalStatus = (result: PushRecoveryResult) => {
+      console.log('FCM: ensurePushRegistration final status.', {
+        uid: targetUser?.uid ?? null,
+        reason,
+        status: result.status,
+        attempted: result.attempted,
+        registered: result.registered,
+        error: result.error,
+      });
+      return result;
+    };
+
     if (!messaging || !targetUser || !('Notification' in window) || !('serviceWorker' in navigator)) {
-      return {
+      return logFinalStatus({
         attempted: false,
         status: 'skipped',
         registered: false,
-      };
+      });
     }
 
     if (pushRegistrationPromiseRef.current) {
@@ -788,60 +904,158 @@ export default function App() {
     const registrationTask = (async (): Promise<PushRecoveryResult> => {
       const permission = Notification.permission;
       setNotificationPermission(permission);
+      console.log('FCM: ensurePushRegistration Notification.permission.', {
+        uid: targetUser.uid,
+        reason,
+        permission,
+      });
 
       if (permission !== 'granted') {
         await cleanupStoredPushToken();
-        return {
+        return logFinalStatus({
           attempted: false,
           status: 'skipped',
           registered: false,
-        };
+        });
       }
 
       setPushRegistrationStatus('registering');
 
       try {
         const instanceId = getOrCreatePushInstanceId();
-        const { registration, registrationType } = await resolveMessagingRegistration();
-        const token = await getToken(messaging, {
-          vapidKey: FCM_VAPID_KEY,
-          serviceWorkerRegistration: registration,
+        const installedPWA = isInstalledPWA();
+        console.log('FCM: ensurePushRegistration installed PWA detection.', {
+          uid: targetUser.uid,
+          reason,
+          isInstalledPWA: installedPWA,
         });
+        console.log('FCM: ensurePushRegistration resolving service worker registration.', {
+          uid: targetUser.uid,
+          reason,
+          isInstalledPWA: installedPWA,
+        });
+
+        const { registration, registrationType } = await resolveMessagingRegistration(installedPWA);
+        console.log('FCM: ensurePushRegistration using service worker registration.', {
+          uid: targetUser.uid,
+          reason,
+          ...getServiceWorkerRegistrationLogPayload({
+            registration,
+            registrationType,
+            installedPWA,
+          }),
+        });
+
+        console.log('FCM: ensurePushRegistration calling getToken.', {
+          uid: targetUser.uid,
+          reason,
+          registrationType,
+        });
+
+        let token: string | null;
+        try {
+          token = await getToken(messaging, {
+            vapidKey: FCM_VAPID_KEY,
+            serviceWorkerRegistration: registration,
+          });
+        } catch (error) {
+          console.error('FCM: ensurePushRegistration getToken failure.', {
+            uid: targetUser.uid,
+            reason,
+            registrationType,
+          }, error);
+          throw error;
+        }
 
         if (!token) {
           console.warn('FCM: getToken returned no token.', { reason, registrationType });
           setPushRegistrationStatus('failed');
-          return {
+          return logFinalStatus({
             attempted: true,
             status: 'failed',
             registered: false,
             error: 'FCM token was not returned.',
-          };
+          });
         }
+
+        console.log('FCM: ensurePushRegistration getToken success.', {
+          uid: targetUser.uid,
+          reason,
+          registrationType,
+          tokenPreview: getTokenPreview(token),
+          tokenLength: token.length,
+        });
 
         const storedMetadata = readStoredPushMetadata();
         const tokenDocRef = doc(db, 'users', targetUser.uid, 'fcmTokens', encodeURIComponent(token));
-        const existingTokenDoc = await getDoc(tokenDocRef);
+        console.log('FCM: ensurePushRegistration calling token-doc getDoc.', {
+          uid: targetUser.uid,
+          tokenPreview: getTokenPreview(token),
+        });
 
-        await setDoc(tokenDocRef, {
-          token,
-          platform: 'web',
-          userAgent: navigator.userAgent,
-          createdAt: existingTokenDoc.exists()
-            ? (existingTokenDoc.data().createdAt ?? serverTimestamp())
-            : serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          notificationPermission: permission,
-          isInstalledPWA: isInstalledPWA(),
-          instanceId,
-        }, { merge: true });
+        let existingTokenDoc;
+        try {
+          existingTokenDoc = await getDoc(tokenDocRef);
+          console.log('FCM: ensurePushRegistration token-doc getDoc success.', {
+            uid: targetUser.uid,
+            tokenPreview: getTokenPreview(token),
+            exists: existingTokenDoc.exists(),
+          });
+        } catch (error) {
+          console.error('FCM: ensurePushRegistration token-doc getDoc failure.', {
+            uid: targetUser.uid,
+            tokenPreview: getTokenPreview(token),
+          }, error);
+          throw error;
+        }
+
+        console.log('FCM: ensurePushRegistration calling token-doc setDoc.', {
+          uid: targetUser.uid,
+          tokenPreview: getTokenPreview(token),
+        });
 
         try {
+          await setDoc(tokenDocRef, {
+            token,
+            platform: 'web',
+            userAgent: navigator.userAgent,
+            createdAt: existingTokenDoc.exists()
+              ? (existingTokenDoc.data().createdAt ?? serverTimestamp())
+              : serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            notificationPermission: permission,
+            isInstalledPWA: installedPWA,
+            instanceId,
+          }, { merge: true });
+          console.log('FCM: ensurePushRegistration token-doc setDoc success.', {
+            uid: targetUser.uid,
+            tokenPreview: getTokenPreview(token),
+          });
+        } catch (error) {
+          console.error('FCM: ensurePushRegistration token-doc setDoc failure.', {
+            uid: targetUser.uid,
+            tokenPreview: getTokenPreview(token),
+          }, error);
+          throw error;
+        }
+
+        try {
+          console.log('FCM: ensurePushRegistration calling lastTokenRefresh update.', {
+            uid: targetUser.uid,
+            tokenPreview: getTokenPreview(token),
+          });
           await updateDoc(doc(db, 'users', targetUser.uid), {
             lastTokenRefresh: serverTimestamp(),
           });
+          console.log('FCM: ensurePushRegistration lastTokenRefresh update success.', {
+            uid: targetUser.uid,
+            tokenPreview: getTokenPreview(token),
+          });
         } catch (error) {
-          console.warn('FCM: Skipped lastTokenRefresh update because the user doc is not ready yet.', error);
+          console.warn('FCM: ensurePushRegistration lastTokenRefresh update failure.', {
+            uid: targetUser.uid,
+            tokenPreview: getTokenPreview(token),
+          }, error);
         }
 
         if (
@@ -873,28 +1087,20 @@ export default function App() {
         setFcmDebugToken(token);
         setPushRegistrationStatus('registered');
 
-        console.log('FCM: Token registration ensured.', {
-          uid: targetUser.uid,
-          reason,
-          registrationType,
-          tokenPrefix: token.slice(0, 12),
-        });
-
-        return {
+        return logFinalStatus({
           attempted: true,
           status: 'registered',
           registered: true,
           token,
-        };
+        });
       } catch (error) {
         setPushRegistrationStatus('failed');
-        console.error('FCM: Registration failed.', { reason, error });
-        return {
+        return logFinalStatus({
           attempted: true,
           status: 'failed',
           registered: false,
           error: error instanceof Error ? error.message : 'Push registration failed.',
-        };
+        });
       }
     })();
 
@@ -912,6 +1118,11 @@ export default function App() {
     reason: PushRecoveryReason
   ): Promise<PushRecoveryResult> => {
     if (!('Notification' in window)) {
+      console.log('FCM: maybeRecoverPushRegistration decision skip registration recovery.', {
+        uid: targetUser?.uid ?? null,
+        reason,
+        skipReason: 'notification-unsupported',
+      });
       return {
         attempted: false,
         status: 'skipped',
@@ -923,6 +1134,12 @@ export default function App() {
     setNotificationPermission(permission);
 
     if (!targetUser) {
+      console.log('FCM: maybeRecoverPushRegistration decision skip registration recovery.', {
+        uid: null,
+        reason,
+        permission,
+        skipReason: 'no-target-user',
+      });
       return {
         attempted: false,
         status: 'skipped',
@@ -937,6 +1154,12 @@ export default function App() {
         await cleanupStoredPushToken();
       }
 
+      console.log('FCM: maybeRecoverPushRegistration decision skip registration recovery.', {
+        uid: targetUser.uid,
+        reason,
+        permission,
+        skipReason: 'permission-not-granted',
+      });
       return {
         attempted: false,
         status: 'skipped',
@@ -952,12 +1175,19 @@ export default function App() {
       localStatus: pushRegistrationStatus,
     });
 
-    console.log('FCM: Push registration assessment.', {
+    console.log('FCM: maybeRecoverPushRegistration assessment.', {
+      uid: targetUser.uid,
       reason,
+      permission,
+      pushRegistrationStatus,
       assessmentReason: assessment.reason,
       isFreshInstance: assessment.isFreshInstance,
       hasSuccessMarker: assessment.hasSuccessMarker,
       isRegistrationIncomplete: assessment.isRegistrationIncomplete,
+      shouldAttemptRegistration: assessment.shouldAttemptRegistration,
+      shouldConsiderFirestoreConfirmation: assessment.shouldConsiderFirestoreConfirmation,
+      currentInstanceId: assessment.currentInstanceId,
+      hasCurrentToken: Boolean(assessment.currentToken),
     });
 
     if (!assessment.isRegistrationIncomplete) {
@@ -966,6 +1196,13 @@ export default function App() {
         setFcmDebugToken(assessment.currentToken);
       }
       setPushRegistrationStatus('registered');
+      console.log('FCM: maybeRecoverPushRegistration decision skip registration recovery.', {
+        uid: targetUser.uid,
+        reason,
+        permission,
+        assessmentReason: assessment.reason,
+        skipReason: 'registration-already-complete',
+      });
       return {
         attempted: false,
         status: 'registered',
@@ -975,9 +1212,21 @@ export default function App() {
     }
 
     if (assessment.shouldAttemptRegistration) {
+      console.log('FCM: maybeRecoverPushRegistration decision invoke ensurePushRegistration.', {
+        uid: targetUser.uid,
+        reason,
+        attemptReason: assessment.reason,
+      });
       return ensurePushRegistration(targetUser, reason);
     }
 
+    console.log('FCM: maybeRecoverPushRegistration decision skip registration recovery.', {
+      uid: targetUser.uid,
+      reason,
+      permission,
+      assessmentReason: assessment.reason,
+      skipReason: 'confirmation-path-instead-of-registration',
+    });
     const confirmationResult = await confirmCurrentTokenDocIfNeeded({
       user: targetUser,
       permission,
@@ -1006,6 +1255,11 @@ export default function App() {
     }
 
     if (confirmationResult === 'missing_token_doc' || confirmationResult === 'error') {
+      console.log('FCM: maybeRecoverPushRegistration decision invoke ensurePushRegistration.', {
+        uid: targetUser.uid,
+        reason,
+        attemptReason: confirmationResult,
+      });
       return ensurePushRegistration(targetUser, reason);
     }
 
@@ -1013,6 +1267,13 @@ export default function App() {
       setFcmDebugToken(assessment.currentToken);
     }
 
+    console.log('FCM: maybeRecoverPushRegistration decision skip registration recovery.', {
+      uid: targetUser.uid,
+      reason,
+      permission,
+      assessmentReason: assessment.reason,
+      skipReason: 'confirmation-skipped-no-retry',
+    });
     return {
       attempted: false,
       status: 'skipped',
