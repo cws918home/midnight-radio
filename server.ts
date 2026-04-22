@@ -293,7 +293,7 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
     throw new Error("OPENROUTER_API_KEY is not defined in .env file");
   }
 
-  console.log(`Attempting to call OpenAI with model: gpt-4o-mini`);
+  console.log(`Attempting to call OpenAI with model: gpt-5.4-mini`);
  
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
