@@ -1,7 +1,7 @@
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-messaging-compat.js');
 
-// [Midnight Radio] FCM Service Worker Config
+// [Galpi] FCM Service Worker Config
 firebase.initializeApp({
   apiKey: "AIzaSyCle4jS1PzS585w1QR5-kessY2u6vrUcOM",
   authDomain: "ai-studio-applet-webapp-81285.firebaseapp.com",
@@ -12,7 +12,7 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
-const DEFAULT_NOTIFICATION_TITLE = '📻 미드나잇 라디오';
+const DEFAULT_NOTIFICATION_TITLE = '📻 갈피';
 const DEFAULT_NOTIFICATION_BODY = '새로운 소식이 도착했습니다.';
 const DEFAULT_NOTIFICATION_URL = '/';
 
@@ -33,7 +33,7 @@ messaging.onBackgroundMessage((payload) => {
     body: payload.notification?.body || payload.data?.body || DEFAULT_NOTIFICATION_BODY,
     icon: '/pwa-192x192.png',
     badge: '/pwa-192x192.png',
-    tag: 'midnight-radio-notification',
+    tag: 'galpi-notification',
     renotify: true,
     requireInteraction: true,
     data: { url: normalizeNotificationUrl(payload.data?.url) }

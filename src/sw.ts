@@ -12,7 +12,7 @@ declare let self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<string | { url: string; revision?: string | null }>;
 };
 
-const DEFAULT_NOTIFICATION_TITLE = '📻 미드나잇 라디오';
+const DEFAULT_NOTIFICATION_TITLE = '📻 갈피';
 const DEFAULT_NOTIFICATION_BODY = '새로운 소식이 도착했습니다.';
 const DEFAULT_NOTIFICATION_URL = '/';
 
@@ -45,7 +45,7 @@ onBackgroundMessage(messaging, (payload) => {
     body,
     icon: '/pwa-192x192.png',
     badge: '/pwa-192x192.png',
-    tag: 'midnight-radio-notification',
+    tag: 'galpi-notification',
     renotify: true,
     requireInteraction: true,
     data: {

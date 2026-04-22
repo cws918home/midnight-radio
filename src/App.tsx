@@ -84,10 +84,10 @@ const LEGACY_PUBLICATION_WINDOW_MS = 15_000;
 const FCM_VAPID_KEY = 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M';
 const FALLBACK_MESSAGING_SW_URL = '/firebase-messaging-sw.js';
 const FALLBACK_MESSAGING_SW_SCOPE = '/firebase-cloud-messaging-push-scope';
-const PUSH_METADATA_STORAGE_KEY = 'midnight-radio:push-registration-metadata';
-const PUSH_INSTANCE_ID_STORAGE_KEY = 'midnight-radio:push-instance-id';
-const PUSH_LAST_TOKEN_STORAGE_KEY = 'midnight-radio:push-last-known-fcm-token';
-const PUSH_LAST_UID_STORAGE_KEY = 'midnight-radio:push-last-known-fcm-uid';
+const PUSH_METADATA_STORAGE_KEY = 'galpi:push-registration-metadata';
+const PUSH_INSTANCE_ID_STORAGE_KEY = 'galpi:push-instance-id';
+const PUSH_LAST_TOKEN_STORAGE_KEY = 'galpi:push-last-known-fcm-token';
+const PUSH_LAST_UID_STORAGE_KEY = 'galpi:push-last-known-fcm-uid';
 const PUSH_CONFIRMATION_COOLDOWN_MS = 90_000;
 const AI_BOT_PROFILES = [
   { uid: 'bot_empathy', gender: 'female', interests: [] as string[] },
@@ -1415,7 +1415,7 @@ export default function App() {
     const unsubMessaging = onMessage(messaging, (payload) => {
       console.log("Foreground Message received:", payload);
       if (Notification.permission === 'granted') {
-        new Notification(payload.notification?.title || "미드나잇 라디오", {
+        new Notification(payload.notification?.title || "갈피", {
           body: payload.notification?.body,
           icon: '/pwa-192x192.png'
         });
@@ -1531,7 +1531,7 @@ export default function App() {
       if (!initialLoadRef.current) {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'added') {
-            const title = `📻 미드나잇 라디오`;
+            const title = `📻 갈피`;
             const options = {
               body: "누군가 내 고민에 답변을 보냈어요. 지금 확인해보세요.",
               icon: '/pwa-192x192.png',
@@ -1969,7 +1969,7 @@ export default function App() {
         <header className="fixed top-0 left-0 right-0 bg-[#FDFCF8]/80 backdrop-blur-md z-50 border-b border-[#E9EDC9]/50">
           <div className="max-w-2xl mx-auto px-6 h-16 flex items-center justify-between">
             <button onClick={() => setView('home')} className="text-xl font-serif font-bold tracking-tight text-[#D4A373] flex items-center gap-2">
-              <Radio className="w-5 h-5" /> 미드나잇 라디오
+              <Radio className="w-5 h-5" /> 갈피
             </button>
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#E9EDC9]/50 rounded-full text-[10px] sm:text-xs font-bold text-[#A3B18A]">
@@ -2011,7 +2011,7 @@ export default function App() {
                 <div className="w-24 h-24 bg-[#FAEDCD] rounded-full flex items-center justify-center mx-auto shadow-md">
                   <Radio className="w-12 h-12 text-[#D4A373]" />
                 </div>
-                <h1 className="text-4xl font-serif font-bold text-[#5A5A40]">Midnight Radio</h1>
+                <h1 className="text-4xl font-serif font-bold text-[#5A5A40]">Galpi</h1>
                 <p className="text-[#8B8B6B]">나의 이야기가 밤하늘을 타고<br/>누군가에게 닿는 시간</p>
               </div>
 
@@ -2170,7 +2170,7 @@ export default function App() {
                   <button 
                     onClick={() => {
                       if (navigator.share) {
-                        navigator.share({ title: '미드나잇 라디오', text: '당신의 밤을 위로하는 익명 라디오 사연 앱', url: window.location.origin });
+                        navigator.share({ title: '갈피', text: '당신의 밤을 위로하는 익명 라디오 사연 앱', url: window.location.origin });
                       } else {
                         navigator.clipboard.writeText(window.location.origin);
                         alert("링크가 복사되었습니다!");
@@ -2443,7 +2443,7 @@ export default function App() {
                         )}
                       </div>
                       
-                      {!selectedReply.publisherComment ? (
+                      {!selectedReply.publisherComment && selectedReply.feedback === 'helpful' ? (
                         <div className="bg-white p-6 rounded-2xl border border-[#FAEDCD]">
                           <h4 className="font-bold text-[#5A5A40] mb-2 text-sm">따뜻한 마음을 받은 답장, 코멘트 남기기</h4>
                           <p className="text-xs text-[#8B8B6B] mb-4">내 고민을 들어준 분에게 감사 인사나 추가 코멘트를 남길 수 있습니다.</p>
@@ -2454,12 +2454,12 @@ export default function App() {
                           />
 
                         </div>
-                      ) : (
+                      ) : selectedReply.publisherComment ? (
                         <div className="bg-[#FAEDCD]/50 p-6 rounded-2xl border border-[#E9EDC9]">
                           <div className="text-xs font-bold text-[#A3B18A] mb-2">내가 남긴 코멘트</div>
                           <p className="text-[#5A5A40] text-sm leading-relaxed">{selectedReply.publisherComment}</p>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   ) : (
                     <>

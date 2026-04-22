@@ -176,7 +176,7 @@ async function sendPushNotification(uid: string, title: string, body: string) {
             android: {
               priority: 'high',
               notification: {
-                channelId: 'midnight-radio-main',
+                channelId: 'galpi-main',
                 priority: 'max',
               },
             },
@@ -188,7 +188,7 @@ async function sendPushNotification(uid: string, title: string, body: string) {
               notification: {
                 icon: '/pwa-192x192.png',
                 badge: '/pwa-192x192.png',
-                tag: 'midnight-radio-notification',
+                tag: 'galpi-notification',
                 renotify: true,
                 requireInteraction: true,
               },
@@ -234,7 +234,7 @@ async function sendPushNotification(uid: string, title: string, body: string) {
         android: {
           priority: 'high',
           notification: {
-            channelId: 'midnight-radio-main',
+            channelId: 'galpi-main',
             priority: 'max',
           },
         },
@@ -246,7 +246,7 @@ async function sendPushNotification(uid: string, title: string, body: string) {
           notification: {
             icon: '/pwa-192x192.png',
             badge: '/pwa-192x192.png',
-            tag: 'midnight-radio-notification',
+            tag: 'galpi-notification',
             renotify: true,
             requireInteraction: true,
           },
@@ -301,7 +301,7 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "http://localhost:3000",
-      "X-Title": "Midnight Radio"
+      "X-Title": "Galpi"
     },
     body: JSON.stringify({
       model: "openai/gpt-oss-120b:free",
@@ -450,7 +450,7 @@ Return JSON: { "content": "Your reply here" }`;
     if (receiverUids && Array.isArray(receiverUids)) {
       for (const uid of receiverUids) {
         if (!uid.startsWith('bot_')) {
-          await sendPushNotification(uid, "📻 미드나잇 라디오", "새로운 사연이 도착했습니다.");
+          await sendPushNotification(uid, "📻 갈피", "새로운 사연이 도착했습니다.");
         }
       }
     }
@@ -460,7 +460,7 @@ Return JSON: { "content": "Your reply here" }`;
   app.post("/api/notify-new-reply", async (req, res) => {
     const { receiverUid } = req.body;
     if (receiverUid && !receiverUid.startsWith('bot_')) {
-      await sendPushNotification(receiverUid, "📻 미드나잇 라디오", "보낸 사연에 답장이 도착했습니다.");
+      await sendPushNotification(receiverUid, "📻 갈피", "보낸 사연에 답장이 도착했습니다.");
     }
     res.json({ status: "ok" });
   });
@@ -468,7 +468,7 @@ Return JSON: { "content": "Your reply here" }`;
   app.post("/api/notify-new-comment", async (req, res) => {
     const { receiverUid } = req.body;
     if (receiverUid && !receiverUid.startsWith('bot_')) {
-      await sendPushNotification(receiverUid, "📻 미드나잇 라디오", "남겨주신 답장에 코멘트가 달렸습니다.");
+      await sendPushNotification(receiverUid, "📻 갈피", "남겨주신 답장에 코멘트가 달렸습니다.");
     }
     res.json({ status: "ok" });
   });
@@ -518,7 +518,7 @@ Return JSON: { "content": "Your reply here" }`;
         console.log(`[Bot] Delayed reply from ${botInfo.uid} saved.`);
 
         // Notify the user
-        await sendPushNotification(receiverId, "📻 미드나잇 라디오", "보낸 사연에 답장이 도착했습니다.");
+        await sendPushNotification(receiverId, "📻 갈피", "보낸 사연에 답장이 도착했습니다.");
       } catch (err) {
         console.error(`[Bot] Delayed reply failed for ${botInfo.uid}:`, err);
       }

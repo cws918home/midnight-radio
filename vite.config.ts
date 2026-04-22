@@ -24,9 +24,9 @@ export default defineConfig(({mode}) => {
         },
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
         manifest: {
-          id: '/midnight-radio',
-          name: '미드나잇 라디오',
-          short_name: '미드나잇',
+          id: '/galpi',
+          name: '갈피',
+          short_name: '갈피',
           description: '밤을 위로하는 익명 라디오 사연 앱',
           theme_color: '#FDFCF8',
           background_color: '#FDFCF8',
@@ -53,14 +53,14 @@ export default defineConfig(({mode}) => {
               sizes: '512x512',
               type: 'image/png',
               form_factor: 'narrow',
-              label: '미드나잇 라디오 모바일'
+              label: '갈피 모바일'
             },
             {
               src: 'pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               form_factor: 'wide',
-              label: '미드나잇 라디오 데스크톱'
+              label: '갈피 데스크톱'
             }
           ]
         }
