@@ -5,9 +5,17 @@ service cloud.firestore {
     function isAuthenticated() {
       return request.auth != null;
     }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
     
     match /users/{userId} {
       allow read, write: if isAuthenticated();
+
+      match /fcmTokens/{tokenId} {
+        allow read, write, delete: if isOwner(userId);
+      }
     }
 
     match /letters/{letterId} {

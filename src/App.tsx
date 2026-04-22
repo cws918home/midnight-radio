@@ -82,6 +82,7 @@ interface SentPublicationGroup {
 const LEGACY_PUBLICATION_WINDOW_MS = 15_000;
 const FCM_VAPID_KEY = 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M';
 const FALLBACK_MESSAGING_SW_URL = '/firebase-messaging-sw.js';
+const FALLBACK_MESSAGING_SW_SCOPE = '/firebase-cloud-messaging-push-scope';
 const PUSH_INSTANCE_ID_STORAGE_KEY = 'midnight-radio:push-instance-id';
 const PUSH_LAST_TOKEN_STORAGE_KEY = 'midnight-radio:push-last-known-fcm-token';
 const PUSH_LAST_UID_STORAGE_KEY = 'midnight-radio:push-last-known-fcm-uid';
@@ -500,12 +501,13 @@ export default function App() {
     }
 
     const fallbackRegistration = await navigator.serviceWorker.register(FALLBACK_MESSAGING_SW_URL, {
-      scope: '/',
+      scope: FALLBACK_MESSAGING_SW_SCOPE,
     });
     await waitForActivatedServiceWorker(fallbackRegistration);
 
     console.log('FCM: Using fallback Firebase messaging service worker registration.', {
       scriptURL: getServiceWorkerScriptUrl(fallbackRegistration),
+      scope: fallbackRegistration.scope,
       isInstalledPWA: isInstalledPWA(),
     });
 
