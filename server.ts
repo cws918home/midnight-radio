@@ -203,7 +203,7 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
       "X-Title": "Midnight Radio"
     },
     body: JSON.stringify({
-      model: "moonshotai/kimi-k2.5",
+      model: "google/gemma-4-31b-it:free",
       messages: [
         { role: "system", content: systemInstruction },
         { role: "user", content: userContent }
