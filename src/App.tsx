@@ -2275,7 +2275,6 @@ export default function App() {
               </div>
               
               <h2 className="text-2xl font-serif font-bold mb-2">위로를 건네주세요</h2>
-              <p className="text-[#8B8B6B] mb-8">AI가 당신의 답변을 더 다정하고 부드럽게 다듬어 상대방에게 전달합니다.</p>
               
               <WriteForm type="reply" isProcessing={isProcessing} onSubmit={(content) => sendReply(content, selectedWorry)} />
             </motion.div>
