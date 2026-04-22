@@ -41,13 +41,7 @@ onBackgroundMessage(messaging, (payload) => {
   const title = payload.notification?.title || payload.data?.title || DEFAULT_NOTIFICATION_TITLE;
   const body = payload.notification?.body || payload.data?.body || DEFAULT_NOTIFICATION_BODY;
   const url = normalizeNotificationUrl(payload.data?.url);
-
-  console.log('[sw] Received background FCM payload.', {
-    title,
-    url,
-  });
-
-  void self.registration.showNotification(title, {
+  const notificationOptions = {
     body,
     icon: '/pwa-192x192.png',
     badge: '/pwa-192x192.png',
@@ -57,7 +51,14 @@ onBackgroundMessage(messaging, (payload) => {
     data: {
       url,
     },
+  } as NotificationOptions;
+
+  console.log('[sw] Received background FCM payload.', {
+    title,
+    url,
   });
+
+  void self.registration.showNotification(title, notificationOptions);
 });
 
 self.addEventListener('notificationclick', (event) => {

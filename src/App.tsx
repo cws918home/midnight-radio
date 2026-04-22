@@ -19,7 +19,8 @@ import {
   limit,
   Timestamp,
   setDoc,
-  getDoc
+  getDoc,
+  getDocs
 } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
 import { auth, db, googleProvider, messaging } from './firebase';
