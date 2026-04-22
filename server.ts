@@ -157,13 +157,24 @@ async function sendPushNotification(uid: string, title: string, body: string) {
         body,
         url: '/'
       },
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'midnight-radio-main',
+          priority: 'max'
+        }
+      },
       webpush: {
+        headers: {
+          Urgency: 'high'
+        },
         fcmOptions: { link: '/' },
         notification: {
           icon: '/pwa-192x192.png',
           badge: '/pwa-192x192.png',
           tag: 'midnight-radio-notification',
-          renotify: true
+          renotify: true,
+          requireInteraction: true // 사용자가 닫기 전까지 유지
         }
       }
     });
