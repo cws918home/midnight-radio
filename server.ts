@@ -293,24 +293,22 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
     throw new Error("OPENROUTER_API_KEY is not defined in .env file");
   }
 
-  console.log(`Attempting to call OpenRouter with model: openai/gpt-oss-120b:free`);
+  console.log(`Attempting to call OpenAI with model: gpt-4o-mini`);
  
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "http://localhost:3000",
-      "X-Title": "Galpi"
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: "openai/gpt-oss-120b:free",
+      model: "gpt-5.4-mini",
       messages: [
         { role: "system", content: systemInstruction },
         { role: "user", content: userContent }
       ],
       temperature: 0.1,
-      max_tokens: 1000 // Limit tokens to stay within credit budget
+      max_tokens: 1000
     })
   });
 
