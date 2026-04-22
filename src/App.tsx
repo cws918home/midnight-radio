@@ -84,9 +84,11 @@ const LEGACY_PUBLICATION_WINDOW_MS = 15_000;
 const FCM_VAPID_KEY = 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M';
 const FALLBACK_MESSAGING_SW_URL = '/firebase-messaging-sw.js';
 const FALLBACK_MESSAGING_SW_SCOPE = '/firebase-cloud-messaging-push-scope';
+const PUSH_METADATA_STORAGE_KEY = 'midnight-radio:push-registration-metadata';
 const PUSH_INSTANCE_ID_STORAGE_KEY = 'midnight-radio:push-instance-id';
 const PUSH_LAST_TOKEN_STORAGE_KEY = 'midnight-radio:push-last-known-fcm-token';
 const PUSH_LAST_UID_STORAGE_KEY = 'midnight-radio:push-last-known-fcm-uid';
+const PUSH_CONFIRMATION_COOLDOWN_MS = 90_000;
 const AI_BOT_PROFILES = [
   { uid: 'bot_empathy', gender: 'female', interests: [] as string[] },
   { uid: 'bot_logic', gender: 'male', interests: [] as string[] },
@@ -94,6 +96,45 @@ const AI_BOT_PROFILES = [
 ] as const;
 
 type MatchSelectionType = 'matched' | 'random_fallback' | 'ai' | 'ai_safety_fallback';
+type PushRegistrationStatus = 'idle' | 'registering' | 'registered' | 'failed' | 'missing_token_doc';
+type PushRecoveryReason =
+  | 'auth-restored'
+  | 'auth-restored-no-profile'
+  | 'signed-in-stable'
+  | 'permission-granted'
+  | 'app-foreground'
+  | 'installed-pwa-initial';
+
+interface StoredPushMetadata {
+  instanceId: string | null;
+  lastKnownFcmToken: string | null;
+  lastKnownUid: string | null;
+  lastSuccessfulRegistrationAt: number | null;
+  lastSuccessfulRegistrationToken: string | null;
+  lastSuccessfulRegistrationUid: string | null;
+  lastSuccessfulRegistrationInstanceId: string | null;
+}
+
+interface PushRegistrationAssessment {
+  isFreshInstance: boolean;
+  hasSuccessMarker: boolean;
+  isRegistrationIncomplete: boolean;
+  shouldAttemptRegistration: boolean;
+  shouldConsiderFirestoreConfirmation: boolean;
+  currentInstanceId: string | null;
+  currentToken: string | null;
+  reason: string;
+}
+
+type FirestoreConfirmationResult = 'confirmed' | 'missing_token_doc' | 'skipped' | 'error';
+
+interface PushRecoveryResult {
+  attempted: boolean;
+  status: PushRegistrationStatus | 'confirmed' | 'skipped';
+  registered: boolean;
+  token?: string | null;
+  error?: string;
+}
 
 type DeliveryRecipient = Pick<UserProfile, 'uid' | 'gender' | 'interests'> & {
   matchOverlapCount: number;
@@ -311,40 +352,89 @@ const getServiceWorkerScriptUrl = (registration?: ServiceWorkerRegistration | nu
 const isFallbackMessagingRegistration = (registration?: ServiceWorkerRegistration | null) =>
   getServiceWorkerScriptUrl(registration).includes(FALLBACK_MESSAGING_SW_URL);
 
-const getStoredPushState = () => {
+const getDefaultStoredPushMetadata = (): StoredPushMetadata => ({
+  instanceId: null,
+  lastKnownFcmToken: null,
+  lastKnownUid: null,
+  lastSuccessfulRegistrationAt: null,
+  lastSuccessfulRegistrationToken: null,
+  lastSuccessfulRegistrationUid: null,
+  lastSuccessfulRegistrationInstanceId: null,
+});
+
+const readStoredPushMetadata = (): StoredPushMetadata => {
   if (typeof window === 'undefined') {
-    return {
-      instanceId: null,
-      lastKnownToken: null,
-      lastKnownUid: null,
-    };
+    return getDefaultStoredPushMetadata();
+  }
+
+  const defaults = getDefaultStoredPushMetadata();
+  const rawMetadata = window.localStorage.getItem(PUSH_METADATA_STORAGE_KEY);
+  let parsedMetadata: Partial<StoredPushMetadata> = {};
+
+  if (rawMetadata) {
+    try {
+      parsedMetadata = JSON.parse(rawMetadata) as Partial<StoredPushMetadata>;
+    } catch (error) {
+      console.warn('FCM: Failed to parse stored push metadata, falling back to defaults.', error);
+    }
   }
 
   return {
-    instanceId: window.localStorage.getItem(PUSH_INSTANCE_ID_STORAGE_KEY),
-    lastKnownToken: window.localStorage.getItem(PUSH_LAST_TOKEN_STORAGE_KEY),
-    lastKnownUid: window.localStorage.getItem(PUSH_LAST_UID_STORAGE_KEY),
+    ...defaults,
+    ...parsedMetadata,
+    instanceId: parsedMetadata.instanceId ?? window.localStorage.getItem(PUSH_INSTANCE_ID_STORAGE_KEY),
+    lastKnownFcmToken: parsedMetadata.lastKnownFcmToken ?? window.localStorage.getItem(PUSH_LAST_TOKEN_STORAGE_KEY),
+    lastKnownUid: parsedMetadata.lastKnownUid ?? window.localStorage.getItem(PUSH_LAST_UID_STORAGE_KEY),
   };
 };
 
-const persistStoredPushState = (instanceId: string, uid: string, token: string) => {
+const writeStoredPushMetadata = (updates: Partial<StoredPushMetadata>) => {
   if (typeof window === 'undefined') return;
 
-  window.localStorage.setItem(PUSH_INSTANCE_ID_STORAGE_KEY, instanceId);
-  window.localStorage.setItem(PUSH_LAST_UID_STORAGE_KEY, uid);
-  window.localStorage.setItem(PUSH_LAST_TOKEN_STORAGE_KEY, token);
+  const nextMetadata = {
+    ...readStoredPushMetadata(),
+    ...updates,
+  };
+
+  window.localStorage.setItem(PUSH_METADATA_STORAGE_KEY, JSON.stringify(nextMetadata));
+
+  if (nextMetadata.instanceId) {
+    window.localStorage.setItem(PUSH_INSTANCE_ID_STORAGE_KEY, nextMetadata.instanceId);
+  } else {
+    window.localStorage.removeItem(PUSH_INSTANCE_ID_STORAGE_KEY);
+  }
+
+  if (nextMetadata.lastKnownUid) {
+    window.localStorage.setItem(PUSH_LAST_UID_STORAGE_KEY, nextMetadata.lastKnownUid);
+  } else {
+    window.localStorage.removeItem(PUSH_LAST_UID_STORAGE_KEY);
+  }
+
+  if (nextMetadata.lastKnownFcmToken) {
+    window.localStorage.setItem(PUSH_LAST_TOKEN_STORAGE_KEY, nextMetadata.lastKnownFcmToken);
+  } else {
+    window.localStorage.removeItem(PUSH_LAST_TOKEN_STORAGE_KEY);
+  }
 };
 
-const clearStoredPushState = () => {
+const clearStoredPushMetadata = () => {
   if (typeof window === 'undefined') return;
 
-  window.localStorage.removeItem(PUSH_INSTANCE_ID_STORAGE_KEY);
-  window.localStorage.removeItem(PUSH_LAST_UID_STORAGE_KEY);
-  window.localStorage.removeItem(PUSH_LAST_TOKEN_STORAGE_KEY);
+  const { instanceId } = readStoredPushMetadata();
+
+  writeStoredPushMetadata({
+    instanceId,
+    lastKnownFcmToken: null,
+    lastKnownUid: null,
+    lastSuccessfulRegistrationAt: null,
+    lastSuccessfulRegistrationToken: null,
+    lastSuccessfulRegistrationUid: null,
+    lastSuccessfulRegistrationInstanceId: null,
+  });
 };
 
 const getOrCreatePushInstanceId = () => {
-  const { instanceId } = getStoredPushState();
+  const { instanceId } = readStoredPushMetadata();
 
   if (instanceId) {
     return instanceId;
@@ -354,9 +444,7 @@ const getOrCreatePushInstanceId = () => {
     ? crypto.randomUUID()
     : `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(PUSH_INSTANCE_ID_STORAGE_KEY, nextInstanceId);
-  }
+  writeStoredPushMetadata({ instanceId: nextInstanceId });
 
   return nextInstanceId;
 };
@@ -443,11 +531,17 @@ export default function App() {
     }
   };
 
-  const [notificationPermission, setNotificationPermission] = useState<string>(
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     'Notification' in window ? Notification.permission : 'denied'
   );
+  const [pushRegistrationStatus, setPushRegistrationStatus] = useState<PushRegistrationStatus>('idle');
   const [fcmDebugToken, setFcmDebugToken] = useState<string>('');
   const pushCleanupInFlightRef = useRef(false);
+  const pushRegistrationPromiseRef = useRef<Promise<PushRecoveryResult> | null>(null);
+  const pushConfirmedTokenKeysRef = useRef<Set<string>>(new Set());
+  const installedPwaAttemptedUidRef = useRef<string | null>(null);
+
+  const getPushTokenSessionKey = (uid: string, token: string) => `${uid}::${token}`;
 
   const deleteStoredTokenDoc = async (uid: string, token: string) => {
     await deleteDoc(doc(db, 'users', uid, 'fcmTokens', encodeURIComponent(token)));
@@ -458,23 +552,26 @@ export default function App() {
   };
 
   const cleanupStoredPushToken = async () => {
-    const { lastKnownToken, lastKnownUid } = getStoredPushState();
+    const { lastKnownFcmToken, lastKnownUid } = readStoredPushMetadata();
 
-    if (!lastKnownToken || !lastKnownUid || pushCleanupInFlightRef.current) {
-      clearStoredPushState();
+    if (!lastKnownFcmToken || !lastKnownUid || pushCleanupInFlightRef.current) {
+      clearStoredPushMetadata();
       setFcmDebugToken('');
+      setPushRegistrationStatus('idle');
       return;
     }
 
     pushCleanupInFlightRef.current = true;
 
     try {
-      await deleteStoredTokenDoc(lastKnownUid, lastKnownToken);
+      await deleteStoredTokenDoc(lastKnownUid, lastKnownFcmToken);
     } catch (err) {
       console.error('FCM: Failed to delete the stored token document during cleanup.', err);
     } finally {
-      clearStoredPushState();
+      clearStoredPushMetadata();
+      pushConfirmedTokenKeysRef.current.clear();
       setFcmDebugToken('');
+      setPushRegistrationStatus('idle');
       pushCleanupInFlightRef.current = false;
     }
   };
@@ -518,85 +615,410 @@ export default function App() {
     };
   };
 
-  const saveFCMToken = async (
-    targetUser: FirebaseUser | null,
-    options?: {
-      showSuccessAlert?: boolean;
-      showErrorAlert?: boolean;
+  const assessPushRegistrationState = ({
+    user: assessmentUser,
+    permission,
+    storedMetadata,
+    localStatus,
+  }: {
+    user: FirebaseUser | null;
+    permission: NotificationPermission;
+    storedMetadata: StoredPushMetadata;
+    localStatus: PushRegistrationStatus;
+  }): PushRegistrationAssessment => {
+    const currentInstanceId = storedMetadata.instanceId;
+    const currentToken = assessmentUser && storedMetadata.lastKnownUid === assessmentUser.uid
+      ? storedMetadata.lastKnownFcmToken
+      : null;
+    const hasSuccessMarker = Boolean(
+      assessmentUser
+      && currentInstanceId
+      && currentToken
+      && storedMetadata.lastSuccessfulRegistrationUid === assessmentUser.uid
+      && storedMetadata.lastSuccessfulRegistrationInstanceId === currentInstanceId
+      && storedMetadata.lastSuccessfulRegistrationToken === currentToken
+    );
+    const isFreshInstance = !storedMetadata.lastKnownUid
+      && !storedMetadata.lastKnownFcmToken
+      && !storedMetadata.lastSuccessfulRegistrationAt
+      && !storedMetadata.lastSuccessfulRegistrationToken;
+
+    if (permission !== 'granted') {
+      return {
+        isFreshInstance,
+        hasSuccessMarker,
+        isRegistrationIncomplete: false,
+        shouldAttemptRegistration: false,
+        shouldConsiderFirestoreConfirmation: false,
+        currentInstanceId,
+        currentToken,
+        reason: 'permission-not-granted',
+      };
     }
-  ) => {
+
+    if (!assessmentUser) {
+      return {
+        isFreshInstance,
+        hasSuccessMarker,
+        isRegistrationIncomplete: false,
+        shouldAttemptRegistration: false,
+        shouldConsiderFirestoreConfirmation: false,
+        currentInstanceId,
+        currentToken,
+        reason: 'no-signed-in-user',
+      };
+    }
+
+    const noCurrentToken = !currentToken;
+    const hasLocalFailure = localStatus === 'failed' || localStatus === 'missing_token_doc';
+    const successMarkerMismatch = Boolean(currentToken) && !hasSuccessMarker;
+    const isRegistrationIncomplete = noCurrentToken || hasLocalFailure || !hasSuccessMarker;
+    const shouldAttemptRegistration = noCurrentToken || hasLocalFailure;
+    const shouldConsiderFirestoreConfirmation = Boolean(
+      currentToken
+      && !pushRegistrationPromiseRef.current
+      && (
+        !hasSuccessMarker
+        || localStatus === 'failed'
+        || localStatus === 'missing_token_doc'
+        || successMarkerMismatch
+      )
+    );
+
+    let reason = 'registration-complete';
+    if (noCurrentToken) {
+      reason = isFreshInstance ? 'fresh-instance-no-token' : 'missing-local-token';
+    } else if (localStatus === 'missing_token_doc') {
+      reason = 'missing-token-doc';
+    } else if (localStatus === 'failed') {
+      reason = 'previous-registration-failed';
+    } else if (successMarkerMismatch) {
+      reason = 'missing-or-stale-success-marker';
+    }
+
+    return {
+      isFreshInstance,
+      hasSuccessMarker,
+      isRegistrationIncomplete,
+      shouldAttemptRegistration,
+      shouldConsiderFirestoreConfirmation,
+      currentInstanceId,
+      currentToken,
+      reason,
+    };
+  };
+
+  const confirmCurrentTokenDocIfNeeded = async ({
+    user: confirmationUser,
+    permission,
+    assessment,
+    storedMetadata,
+  }: {
+    user: FirebaseUser | null;
+    permission: NotificationPermission;
+    assessment: PushRegistrationAssessment;
+    storedMetadata: StoredPushMetadata;
+  }): Promise<FirestoreConfirmationResult> => {
+    if (
+      permission !== 'granted'
+      || !confirmationUser
+      || !assessment.shouldConsiderFirestoreConfirmation
+      || !assessment.currentToken
+      || pushRegistrationPromiseRef.current
+    ) {
+      return 'skipped';
+    }
+
+    const sessionKey = getPushTokenSessionKey(confirmationUser.uid, assessment.currentToken);
+
+    if (pushConfirmedTokenKeysRef.current.has(sessionKey) && pushRegistrationStatus === 'registered') {
+      return 'skipped';
+    }
+
+    if (
+      storedMetadata.lastSuccessfulRegistrationAt
+      && Date.now() - storedMetadata.lastSuccessfulRegistrationAt < PUSH_CONFIRMATION_COOLDOWN_MS
+    ) {
+      return 'skipped';
+    }
+
+    try {
+      const tokenDocRef = doc(
+        db,
+        'users',
+        confirmationUser.uid,
+        'fcmTokens',
+        encodeURIComponent(assessment.currentToken)
+      );
+      const tokenDocSnap = await getDoc(tokenDocRef);
+
+      if (!tokenDocSnap.exists()) {
+        setPushRegistrationStatus('missing_token_doc');
+        console.warn('FCM: Token confirmation found a missing token document.', {
+          uid: confirmationUser.uid,
+          tokenPrefix: assessment.currentToken.slice(0, 12),
+        });
+        return 'missing_token_doc';
+      }
+
+      pushConfirmedTokenKeysRef.current.add(sessionKey);
+      return 'confirmed';
+    } catch (error) {
+      console.error('FCM: Token confirmation failed.', error);
+      return 'error';
+    }
+  };
+
+  const ensurePushRegistration = async (
+    targetUser: FirebaseUser | null,
+    reason: PushRecoveryReason
+  ): Promise<PushRecoveryResult> => {
     if (!messaging || !targetUser || !('Notification' in window) || !('serviceWorker' in navigator)) {
-      return;
+      return {
+        attempted: false,
+        status: 'skipped',
+        registered: false,
+      };
+    }
+
+    if (pushRegistrationPromiseRef.current) {
+      return pushRegistrationPromiseRef.current;
+    }
+
+    const registrationTask = (async (): Promise<PushRecoveryResult> => {
+      const permission = Notification.permission;
+      setNotificationPermission(permission);
+
+      if (permission !== 'granted') {
+        await cleanupStoredPushToken();
+        return {
+          attempted: false,
+          status: 'skipped',
+          registered: false,
+        };
+      }
+
+      setPushRegistrationStatus('registering');
+
+      try {
+        const instanceId = getOrCreatePushInstanceId();
+        const { registration, registrationType } = await resolveMessagingRegistration();
+        const token = await getToken(messaging, {
+          vapidKey: FCM_VAPID_KEY,
+          serviceWorkerRegistration: registration,
+        });
+
+        if (!token) {
+          console.warn('FCM: getToken returned no token.', { reason, registrationType });
+          setPushRegistrationStatus('failed');
+          return {
+            attempted: true,
+            status: 'failed',
+            registered: false,
+            error: 'FCM token was not returned.',
+          };
+        }
+
+        const storedMetadata = readStoredPushMetadata();
+        const tokenDocRef = doc(db, 'users', targetUser.uid, 'fcmTokens', encodeURIComponent(token));
+        const existingTokenDoc = await getDoc(tokenDocRef);
+
+        await setDoc(tokenDocRef, {
+          token,
+          platform: 'web',
+          userAgent: navigator.userAgent,
+          createdAt: existingTokenDoc.exists()
+            ? (existingTokenDoc.data().createdAt ?? serverTimestamp())
+            : serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          notificationPermission: permission,
+          isInstalledPWA: isInstalledPWA(),
+          instanceId,
+        }, { merge: true });
+
+        try {
+          await updateDoc(doc(db, 'users', targetUser.uid), {
+            lastTokenRefresh: serverTimestamp(),
+          });
+        } catch (error) {
+          console.warn('FCM: Skipped lastTokenRefresh update because the user doc is not ready yet.', error);
+        }
+
+        if (
+          storedMetadata.lastKnownFcmToken
+          && storedMetadata.lastKnownUid
+          && (
+            storedMetadata.lastKnownFcmToken !== token
+            || storedMetadata.lastKnownUid !== targetUser.uid
+          )
+        ) {
+          try {
+            await deleteStoredTokenDoc(storedMetadata.lastKnownUid, storedMetadata.lastKnownFcmToken);
+          } catch (error) {
+            console.error('FCM: Failed to clean up the previous token document for this instance.', error);
+          }
+        }
+
+        writeStoredPushMetadata({
+          instanceId,
+          lastKnownFcmToken: token,
+          lastKnownUid: targetUser.uid,
+          lastSuccessfulRegistrationAt: Date.now(),
+          lastSuccessfulRegistrationToken: token,
+          lastSuccessfulRegistrationUid: targetUser.uid,
+          lastSuccessfulRegistrationInstanceId: instanceId,
+        });
+
+        pushConfirmedTokenKeysRef.current.add(getPushTokenSessionKey(targetUser.uid, token));
+        setFcmDebugToken(token);
+        setPushRegistrationStatus('registered');
+
+        console.log('FCM: Token registration ensured.', {
+          uid: targetUser.uid,
+          reason,
+          registrationType,
+          tokenPrefix: token.slice(0, 12),
+        });
+
+        return {
+          attempted: true,
+          status: 'registered',
+          registered: true,
+          token,
+        };
+      } catch (error) {
+        setPushRegistrationStatus('failed');
+        console.error('FCM: Registration failed.', { reason, error });
+        return {
+          attempted: true,
+          status: 'failed',
+          registered: false,
+          error: error instanceof Error ? error.message : 'Push registration failed.',
+        };
+      }
+    })();
+
+    pushRegistrationPromiseRef.current = registrationTask;
+
+    try {
+      return await registrationTask;
+    } finally {
+      pushRegistrationPromiseRef.current = null;
+    }
+  };
+
+  const maybeRecoverPushRegistration = async (
+    targetUser: FirebaseUser | null,
+    reason: PushRecoveryReason
+  ): Promise<PushRecoveryResult> => {
+    if (!('Notification' in window)) {
+      return {
+        attempted: false,
+        status: 'skipped',
+        registered: false,
+      };
     }
 
     const permission = Notification.permission;
     setNotificationPermission(permission);
 
+    if (!targetUser) {
+      return {
+        attempted: false,
+        status: 'skipped',
+        registered: false,
+      };
+    }
+
     if (permission !== 'granted') {
-      await cleanupStoredPushToken();
-      return;
+      const { lastKnownFcmToken } = readStoredPushMetadata();
+
+      if (pushRegistrationStatus !== 'idle' || lastKnownFcmToken) {
+        await cleanupStoredPushToken();
+      }
+
+      return {
+        attempted: false,
+        status: 'skipped',
+        registered: false,
+      };
     }
 
-    try {
-      const instanceId = getOrCreatePushInstanceId();
-      const { registration, registrationType } = await resolveMessagingRegistration();
-      const token = await getToken(messaging, {
-        vapidKey: FCM_VAPID_KEY,
-        serviceWorkerRegistration: registration,
-      });
+    const storedMetadata = readStoredPushMetadata();
+    const assessment = assessPushRegistrationState({
+      user: targetUser,
+      permission,
+      storedMetadata,
+      localStatus: pushRegistrationStatus,
+    });
 
-      if (!token) {
-        console.warn('FCM: getToken returned no token.', { registrationType });
-        return;
+    console.log('FCM: Push registration assessment.', {
+      reason,
+      assessmentReason: assessment.reason,
+      isFreshInstance: assessment.isFreshInstance,
+      hasSuccessMarker: assessment.hasSuccessMarker,
+      isRegistrationIncomplete: assessment.isRegistrationIncomplete,
+    });
+
+    if (!assessment.isRegistrationIncomplete) {
+      if (targetUser && assessment.currentToken) {
+        pushConfirmedTokenKeysRef.current.add(getPushTokenSessionKey(targetUser.uid, assessment.currentToken));
+        setFcmDebugToken(assessment.currentToken);
       }
-
-      const tokenDocRef = doc(db, 'users', targetUser.uid, 'fcmTokens', encodeURIComponent(token));
-      const existingTokenDoc = await getDoc(tokenDocRef);
-      const { lastKnownToken, lastKnownUid } = getStoredPushState();
-
-      await setDoc(tokenDocRef, {
-        token,
-        platform: 'web',
-        userAgent: navigator.userAgent,
-        createdAt: existingTokenDoc.exists()
-          ? (existingTokenDoc.data().createdAt ?? serverTimestamp())
-          : serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        notificationPermission: permission,
-        isInstalledPWA: isInstalledPWA(),
-        instanceId,
-      }, { merge: true });
-
-      await updateDoc(doc(db, 'users', targetUser.uid), {
-        lastTokenRefresh: serverTimestamp(),
-      });
-
-      if (lastKnownToken && lastKnownUid === targetUser.uid && lastKnownToken !== token) {
-        try {
-          await deleteStoredTokenDoc(targetUser.uid, lastKnownToken);
-        } catch (err) {
-          console.error('FCM: Failed to clean up the previous token document for this instance.', err);
-        }
-      }
-
-      persistStoredPushState(instanceId, targetUser.uid, token);
-      setFcmDebugToken(token);
-      console.log('FCM: Token saved via token subcollection.', {
-        uid: targetUser.uid,
-        registrationType,
-        tokenPrefix: token.slice(0, 12),
-      });
-
-      if (options?.showSuccessAlert) {
-        alert('알림 설정 완료! 토큰이 갱신되었습니다.');
-      }
-    } catch (err) {
-      console.error('FCM Token Error:', err);
-
-      if (options?.showErrorAlert) {
-        alert('오류: ' + (err instanceof Error ? err.message : '알림 설정 실패'));
-      }
+      setPushRegistrationStatus('registered');
+      return {
+        attempted: false,
+        status: 'registered',
+        registered: true,
+        token: assessment.currentToken,
+      };
     }
+
+    if (assessment.shouldAttemptRegistration) {
+      return ensurePushRegistration(targetUser, reason);
+    }
+
+    const confirmationResult = await confirmCurrentTokenDocIfNeeded({
+      user: targetUser,
+      permission,
+      assessment,
+      storedMetadata,
+    });
+
+    if (confirmationResult === 'confirmed' && targetUser && assessment.currentToken && assessment.currentInstanceId) {
+      writeStoredPushMetadata({
+        instanceId: assessment.currentInstanceId,
+        lastKnownFcmToken: assessment.currentToken,
+        lastKnownUid: targetUser.uid,
+        lastSuccessfulRegistrationAt: Date.now(),
+        lastSuccessfulRegistrationToken: assessment.currentToken,
+        lastSuccessfulRegistrationUid: targetUser.uid,
+        lastSuccessfulRegistrationInstanceId: assessment.currentInstanceId,
+      });
+      setFcmDebugToken(assessment.currentToken);
+      setPushRegistrationStatus('registered');
+      return {
+        attempted: false,
+        status: 'confirmed',
+        registered: true,
+        token: assessment.currentToken,
+      };
+    }
+
+    if (confirmationResult === 'missing_token_doc' || confirmationResult === 'error') {
+      return ensurePushRegistration(targetUser, reason);
+    }
+
+    if (assessment.currentToken) {
+      setFcmDebugToken(assessment.currentToken);
+    }
+
+    return {
+      attempted: false,
+      status: 'skipped',
+      registered: false,
+      token: assessment.currentToken,
+    };
   };
 
   const requestNotificationPermission = async () => {
@@ -606,10 +1028,13 @@ export default function App() {
     setNotificationPermission(permission);
 
     if (permission === 'granted') {
-      await saveFCMToken(user, {
-        showSuccessAlert: true,
-        showErrorAlert: true,
-      });
+      const result = await maybeRecoverPushRegistration(user, 'permission-granted');
+
+      if (result.registered) {
+        alert('알림 설정 완료! 토큰이 갱신되었습니다.');
+      } else {
+        alert('오류: ' + (result.error ?? '알림 설정 실패'));
+      }
       return;
     }
 
@@ -617,9 +1042,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    const { lastKnownToken } = getStoredPushState();
-    if (lastKnownToken) {
-      setFcmDebugToken(lastKnownToken);
+    const { lastKnownFcmToken } = readStoredPushMetadata();
+    if (lastKnownFcmToken) {
+      setFcmDebugToken(lastKnownFcmToken);
     }
   }, []);
 
@@ -632,6 +1057,11 @@ export default function App() {
 
       if (permission !== 'granted') {
         await cleanupStoredPushToken();
+        return;
+      }
+
+      if (user) {
+        await maybeRecoverPushRegistration(user, 'app-foreground');
       }
     };
 
@@ -642,14 +1072,18 @@ export default function App() {
     };
 
     void syncNotificationPermissionState();
-    window.addEventListener('focus', syncNotificationPermissionState);
+    const handleFocus = () => {
+      void syncNotificationPermissionState();
+    };
+
+    window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      window.removeEventListener('focus', syncNotificationPermissionState);
+      window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, []);
+  }, [user, pushRegistrationStatus]);
   // Auth & Profile Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -665,18 +1099,24 @@ export default function App() {
             const userData = userSnap.data() as UserProfile;
             setProfile(userData);
             setView(prev => (['onboarding', 'login'].includes(prev) ? 'home' : prev));
-            
-            if ('Notification' in window && Notification.permission === 'granted') {
-              void saveFCMToken(currentUser);
-            }
           } else {
             setProfile(null);
             setView('onboarding');
+          }
+
+          if ('Notification' in window && Notification.permission === 'granted') {
+            void maybeRecoverPushRegistration(
+              currentUser,
+              userSnap.exists() ? 'auth-restored' : 'auth-restored-no-profile'
+            );
           }
         } else {
           setUser(null);
           setProfile(null);
           setView('login');
+          setPushRegistrationStatus('idle');
+          pushConfirmedTokenKeysRef.current.clear();
+          installedPwaAttemptedUidRef.current = null;
         }
       } catch (err) {
         console.error("Auth State Error", err);
@@ -686,6 +1126,27 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!user || loading || notificationPermission !== 'granted') {
+      return;
+    }
+
+    void maybeRecoverPushRegistration(user, 'signed-in-stable');
+  }, [user, loading, profile, notificationPermission]);
+
+  useEffect(() => {
+    if (!user || loading || notificationPermission !== 'granted' || !isInstalledPWA()) {
+      return;
+    }
+
+    if (installedPwaAttemptedUidRef.current === user.uid) {
+      return;
+    }
+
+    installedPwaAttemptedUidRef.current = user.uid;
+    void maybeRecoverPushRegistration(user, 'installed-pwa-initial');
+  }, [user, loading, notificationPermission]);
 
   // Foreground Message Listener
   useEffect(() => {
