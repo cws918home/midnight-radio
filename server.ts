@@ -43,6 +43,23 @@ const db = getApps().length > 0 ? getFirestore(firestoreDatabaseId) : null;
 const messaging = getApps().length > 0 ? getMessaging() : null;
 const WORRY_CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래', '잡담'] as const;
 const WORRY_CATEGORY_SET = new Set<string>(WORRY_CATEGORIES);
+const INVALID_PUSH_TOKEN_ERROR_CODES = new Set([
+  'messaging/invalid-registration-token',
+  'messaging/registration-token-not-registered',
+]);
+const LEGACY_FALLBACK_INSTANCE_ID = 'legacy-scalar-fallback';
+
+function summarizeToken(token: string) {
+  return token.length <= 18
+    ? token
+    : `${token.slice(0, 12)}...${token.slice(-6)}`;
+}
+
+function isInvalidPushTokenError(err: unknown): err is Error & { code?: string } {
+  return err instanceof Error
+    && typeof (err as { code?: string }).code === 'string'
+    && INVALID_PUSH_TOKEN_ERROR_CODES.has((err as { code?: string }).code as string);
+}
 
 function normalizeWorryCategories(rawCategories: unknown): string[] {
   const values = Array.isArray(rawCategories)
@@ -133,52 +150,136 @@ async function sendPushNotification(uid: string, title: string, body: string) {
 
   try {
     console.log(`Attempting to send notification to UID: ${uid}...`);
-    const userDoc = await db.collection('users').doc(uid).get();
-    
+    const userRef = db.collection('users').doc(uid);
+    const tokenCollectionSnapshot = await userRef.collection('fcmTokens').get();
+
+    if (!tokenCollectionSnapshot.empty) {
+      for (const tokenDoc of tokenCollectionSnapshot.docs) {
+        const token = typeof tokenDoc.data().token === 'string'
+          ? tokenDoc.data().token
+          : decodeURIComponent(tokenDoc.id);
+
+        if (!token) {
+          console.warn(`[Push] UID ${uid}: skipping empty token doc ${tokenDoc.id}.`);
+          continue;
+        }
+
+        try {
+          await messaging.send({
+            token,
+            notification: { title, body },
+            data: {
+              title,
+              body,
+              url: '/',
+            },
+            android: {
+              priority: 'high',
+              notification: {
+                channelId: 'midnight-radio-main',
+                priority: 'max',
+              },
+            },
+            webpush: {
+              headers: {
+                Urgency: 'high',
+              },
+              fcmOptions: { link: '/' },
+              notification: {
+                icon: '/pwa-192x192.png',
+                badge: '/pwa-192x192.png',
+                tag: 'midnight-radio-notification',
+                renotify: true,
+                requireInteraction: true,
+              },
+            },
+          });
+
+          console.log(`[Push] UID ${uid}: delivered via token doc ${tokenDoc.id} (${summarizeToken(token)}).`);
+        } catch (err) {
+          console.error(`[Push] UID ${uid}: failed for token doc ${tokenDoc.id} (${summarizeToken(token)}).`, err);
+
+          if (isInvalidPushTokenError(err)) {
+            await tokenDoc.ref.delete();
+            console.warn(`[Push] UID ${uid}: deleted invalid token doc ${tokenDoc.id}.`);
+          }
+        }
+      }
+
+      return;
+    }
+
+    const userDoc = await userRef.get();
     if (!userDoc.exists) {
       console.warn(`User ${uid} not found in Firestore (Database: ${firestoreDatabaseId})`);
       return;
     }
 
-    const userData = userDoc.data();
-    const fcmToken = userData?.fcmToken;
+    const legacyToken = userDoc.data()?.fcmToken;
 
-    if (!fcmToken) {
-      console.warn(`User ${uid} exists but has no fcmToken registered.`);
+    if (!legacyToken) {
+      console.warn(`User ${uid} has no push token docs and no legacy scalar fallback token.`);
       return;
     }
 
-    console.log(`Found token for ${uid}, sending push via FCM...`);
-    await messaging.send({
-      token: fcmToken,
-      notification: { title, body },
-      data: {
-        title,
-        body,
-        url: '/'
-      },
-      android: {
-        priority: 'high',
-        notification: {
-          channelId: 'midnight-radio-main',
-          priority: 'max'
-        }
-      },
-      webpush: {
-        headers: {
-          Urgency: 'high'
+    try {
+      await messaging.send({
+        token: legacyToken,
+        notification: { title, body },
+        data: {
+          title,
+          body,
+          url: '/',
         },
-        fcmOptions: { link: '/' },
-        notification: {
-          icon: '/pwa-192x192.png',
-          badge: '/pwa-192x192.png',
-          tag: 'midnight-radio-notification',
-          renotify: true,
-          requireInteraction: true // 사용자가 닫기 전까지 유지
-        }
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'midnight-radio-main',
+            priority: 'max',
+          },
+        },
+        webpush: {
+          headers: {
+            Urgency: 'high',
+          },
+          fcmOptions: { link: '/' },
+          notification: {
+            icon: '/pwa-192x192.png',
+            badge: '/pwa-192x192.png',
+            tag: 'midnight-radio-notification',
+            renotify: true,
+            requireInteraction: true,
+          },
+        },
+      });
+
+      console.log(`[Push] UID ${uid}: delivered via legacy scalar fallback (${summarizeToken(legacyToken)}).`);
+
+      await userRef.collection('fcmTokens').doc(encodeURIComponent(legacyToken)).set({
+        token: legacyToken,
+        platform: 'web',
+        userAgent: null,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        notificationPermission: 'unknown',
+        isInstalledPWA: false,
+        instanceId: LEGACY_FALLBACK_INSTANCE_ID,
+      }, { merge: true });
+
+      // TODO: remove users/{uid}.fcmToken once the migration window is complete.
+    } catch (err) {
+      console.error(`[Push] UID ${uid}: legacy scalar fallback delivery failed (${summarizeToken(legacyToken)}).`, err);
+
+      if (isInvalidPushTokenError(err)) {
+        await Promise.all([
+          userRef.collection('fcmTokens').doc(encodeURIComponent(legacyToken)).delete().catch(() => undefined),
+          userRef.update({
+            fcmToken: FieldValue.delete(),
+          }),
+        ]);
+        console.warn(`[Push] UID ${uid}: deleted invalid legacy scalar token.`);
       }
-    });
-    console.log(`✅ Notification successfully sent to ${uid}`);
+    }
   } catch (err) {
     console.error(`❌ Failed to send notification to ${uid}:`, err);
   }

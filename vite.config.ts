@@ -11,9 +11,16 @@ export default defineConfig(({mode}) => {
       react(), 
       tailwindcss(),
       VitePWA({
+        strategies: 'injectManifest',
+        srcDir: 'src',
+        filename: 'sw.ts',
+        injectManifest: {
+          rollupFormat: 'iife'
+        },
         registerType: 'autoUpdate',
         devOptions: {
-          enabled: true // 개발 모드에서도 PWA 활성화
+          enabled: true, // 개발 모드에서도 PWA 활성화
+          type: 'module'
         },
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
         manifest: {

@@ -12,27 +12,68 @@ firebase.initializeApp({
 });
 
 const messaging = firebase.messaging();
+const DEFAULT_NOTIFICATION_TITLE = '📻 미드나잇 라디오';
+const DEFAULT_NOTIFICATION_BODY = '새로운 소식이 도착했습니다.';
+const DEFAULT_NOTIFICATION_URL = '/';
 
-// Background Notification Handler
+function normalizeNotificationUrl(candidateUrl) {
+  try {
+    return new URL(candidateUrl || DEFAULT_NOTIFICATION_URL, self.location.origin).toString();
+  } catch {
+    return new URL(DEFAULT_NOTIFICATION_URL, self.location.origin).toString();
+  }
+}
+
+// Fallback-only background notification handler.
 messaging.onBackgroundMessage((payload) => {
   console.log('[firebase-messaging-sw.js] Received background message ', payload);
   
-  const notificationTitle = payload.notification?.title || "📻 미드나잇 라디오";
+  const notificationTitle = payload.notification?.title || payload.data?.title || DEFAULT_NOTIFICATION_TITLE;
   const notificationOptions = {
-    body: payload.notification?.body || "새로운 소식이 도착했습니다.",
+    body: payload.notification?.body || payload.data?.body || DEFAULT_NOTIFICATION_BODY,
     icon: '/pwa-192x192.png',
     badge: '/pwa-192x192.png',
     tag: 'midnight-radio-notification',
-    data: { url: '/' }
+    renotify: true,
+    requireInteraction: true,
+    data: { url: normalizeNotificationUrl(payload.data?.url) }
   };
 
   self.registration.showNotification(notificationTitle, notificationOptions);
 });
 
-// Click Handler
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  event.waitUntil(
-    clients.openWindow(event.notification.data.url)
-  );
+
+  event.waitUntil((async () => {
+    const targetUrl = normalizeNotificationUrl(event.notification.data?.url);
+    const windowClients = await clients.matchAll({
+      type: 'window',
+      includeUncontrolled: true
+    });
+
+    const exactClient = windowClients.find((client) => client.url === targetUrl);
+    if (exactClient) {
+      await exactClient.focus();
+      return;
+    }
+
+    const sameOriginClient = windowClients.find((client) => {
+      try {
+        return new URL(client.url).origin === self.location.origin;
+      } catch {
+        return false;
+      }
+    });
+
+    if (sameOriginClient) {
+      if (typeof sameOriginClient.navigate === 'function') {
+        await sameOriginClient.navigate(targetUrl);
+      }
+      await sameOriginClient.focus();
+      return;
+    }
+
+    await clients.openWindow(targetUrl);
+  })());
 });
