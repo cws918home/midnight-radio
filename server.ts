@@ -192,7 +192,7 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
     throw new Error("OPENROUTER_API_KEY is not defined in .env file");
   }
 
-  console.log(`Attempting to call OpenRouter with model: moonshotai/kimi-k2.5`);
+  console.log(`Attempting to call OpenRouter with model: z-ai/glm-4.5-air:free`);
  
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -203,7 +203,7 @@ async function fetchFromOpenRouter(systemInstruction: string, userContent: strin
       "X-Title": "Midnight Radio"
     },
     body: JSON.stringify({
-      model: "google/gemma-4-31b-it:free",
+      model: "z-ai/glm-4.5-air:free",
       messages: [
         { role: "system", content: systemInstruction },
         { role: "user", content: userContent }
