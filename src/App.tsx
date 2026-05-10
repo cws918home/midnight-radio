@@ -14,7 +14,6 @@ import {
 } from 'firebase/auth';
 import {
   collection,
-  addDoc,
   query,
   where,
   onSnapshot,
@@ -56,7 +55,12 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
-import { processReply, generateAIReply, processComment } from './services/geminiService';
+import { generateAIReply } from './services/geminiService';
+import {
+  createReplyPublicationAdapters,
+  publishPublisherComment,
+  publishReply,
+} from './services/replyPublication';
 import { publishWorry as publishWorryUseCase } from './services/worryPublication';
 import { createFisherYatesShuffle } from './services/worryPublication/adapters/random';
 import {
@@ -1673,35 +1677,22 @@ export default function App() {
     if (!user) return;
     setIsProcessing(true);
     try {
-      const result = await processReply(content);
-      if (result.status === 'rejected') {
+      const result = await publishReply({
+        authorUid: user.uid,
+        content,
+        worry,
+        adapters: createReplyPublicationAdapters(db),
+      });
+
+      if (result.type === 'rejected') {
         setFilterAlert("부적절한 표현이 감지되었습니다.");
-        setIsProcessing(false);
         return;
       }
 
-      await addDoc(collection(db, 'letters'), {
-        senderId: user.uid,
-        receiverId: worry.senderId, // Always reply back to original sender
-        originalContent: content,
-        refinedContent: content,
-        type: 'reply',
-        replyTo: worry.id,
-        replyToContent: worry.originalContent,
-        createdAt: serverTimestamp(),
-        isRead: false,
-        feedback: null
-      });
-
-      // Notify the worry sender
-      try {
-        await fetch('/api/notify-new-reply', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ receiverUid: worry.senderId })
-        });
-      } catch (notifyErr) {
-        console.error("Notification failed", notifyErr);
+      if (result.type === 'failed') {
+        console.error(result.error);
+        setFilterAlert("답장 전송 실패");
+        return;
       }
 
       setView('home');
@@ -2512,25 +2503,22 @@ function CommentForm({ replyId, replierId, onCommentAdded }: { replyId: string, 
     if (!isLengthValid) return;
     setIsProcessing(true);
     try {
-      const result = await processComment(content);
-      if (result.status === 'rejected') {
+      const result = await publishPublisherComment({
+        replyId,
+        replierId,
+        content,
+        adapters: createReplyPublicationAdapters(db),
+      });
+
+      if (result.type === 'rejected') {
         alert("부적절한 표현이 감지되었습니다. 내용을 수정해주세요."); // Fallback alert for simplicity inside component
-        setIsProcessing(false);
         return;
       }
-      await updateDoc(doc(db, 'letters', replyId), { publisherComment: content });
 
-      // Notify the replier
-      if (!replierId.startsWith('bot_')) {
-        try {
-          await fetch('/api/notify-new-comment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ receiverUid: replierId })
-          });
-        } catch (notifyErr) {
-          console.error("Notification failed", notifyErr);
-        }
+      if (result.type === 'failed') {
+        console.error(result.error);
+        alert("전송 실패");
+        return;
       }
 
       onCommentAdded(content);
