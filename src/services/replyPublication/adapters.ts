@@ -6,7 +6,7 @@ import {
   updateDoc,
   type Firestore,
 } from 'firebase/firestore';
-import { processComment, processReply } from '../geminiService';
+import { processComment, processReply } from '../llmClient';
 import type {
   CommentNotificationPayload,
   PublisherCommentPayload,

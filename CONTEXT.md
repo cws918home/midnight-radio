@@ -17,6 +17,13 @@ This document captures the current client-side worry publication behavior before
 - Firestore letter fields remain compatible, including both `categories` and legacy `category`.
 - `/api/process-worry`, `/api/schedule-bot-reply`, and `/api/notify-new-worry` payload shapes remain unchanged.
 
+## Moderation Normalization
+
+- Provider moderation output is untrusted until normalized.
+- Content rejection means content rejection only when `reason` is a non-empty string.
+- Invalid provider shape and transport failure are publication failures, not content rejection.
+- Worry approval requires at least one valid normalized category.
+
 ## Sent Worry Publication Read-Model
 
 Sent Worry publication history is grouped by a pure read-model before rendering.

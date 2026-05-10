@@ -2,13 +2,17 @@ import dotenv from "dotenv";
 dotenv.config(); // Explicitly call config
 
 import express from "express";
-import { WORRY_CATEGORIES, WORRY_CATEGORY_SET } from "@midnight-radio/domain";
+import { WORRY_CATEGORIES } from "@midnight-radio/domain";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import fs from "fs";
+import {
+  processSimpleModerationResponse,
+  processWorryModerationResponse,
+} from "./src/server/moderationResponses";
 
 // Read client config to get database ID
 const clientConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
@@ -60,31 +64,6 @@ function isInvalidPushTokenError(err: unknown): err is Error & { code?: string }
     && INVALID_PUSH_TOKEN_ERROR_CODES.has((err as { code?: string }).code as string);
 }
 
-function normalizeWorryCategories(rawCategories: unknown): string[] {
-  const values = Array.isArray(rawCategories)
-    ? rawCategories
-    : typeof rawCategories === 'string'
-      ? rawCategories.split(',')
-      : [];
-
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-
-  for (const value of values) {
-    if (typeof value !== 'string') continue;
-
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed) || !WORRY_CATEGORY_SET.has(trimmed)) {
-      continue;
-    }
-
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-
-  return normalized;
-}
-
 async function moderateAndInferWorryCategories(content: string, strictRetry = false) {
   const systemInstruction = `You are a moderator and category inference engine for a Korean anonymous worry-sharing app.
 Use ONLY this fixed category vocabulary:
@@ -116,29 +95,7 @@ ${strictRetry ? '10. This is a retry because the previous answer had invalid JSO
     If the text is safe and you are uncertain about the best category, return exactly:\
     { "status": "approved", "categories": ["잡담"] }' : ''}`;
 
-  const resultObj = await fetchFromOpenRouter(systemInstruction, content);
-
-  if (!resultObj || typeof resultObj !== 'object') {
-    return { status: 'invalid' as const };
-  }
-
-  if ('status' in resultObj && resultObj.status === 'rejected') {
-    return resultObj;
-  }
-
-  const rawCategories =
-    ('categories' in resultObj ? resultObj.categories : undefined) ??
-    (typeof ('category' in resultObj ? resultObj.category : undefined) === 'string'
-      ? [('category' in resultObj ? resultObj.category : undefined)]
-      : ('category' in resultObj ? resultObj.category : undefined));
-  const normalizedCategories = normalizeWorryCategories(rawCategories);
-
-  // Malformed or unusable model output stays on the invalid/category-failure path.
-  if ('status' in resultObj && resultObj.status === 'approved' && normalizedCategories.length > 0) {
-    return { status: 'approved', categories: normalizedCategories };
-  }
-
-  return { status: 'invalid' as const };
+  return await fetchFromOpenRouter(systemInstruction, content);
 }
 
 async function sendPushNotification(uid: string, title: string, body: string) {
@@ -345,43 +302,14 @@ async function startServer() {
   // API Route for Processing Worries (Filtering + Category Inference)
   app.post("/api/process-worry", async (req, res) => {
     try {
-      const { content } = req.body;
-
-      if (typeof content !== 'string' || !content.trim()) {
-        res.json({ status: "rejected", reason: "고민 내용이 비어 있습니다." });
-        return;
-      }
-
-      const firstAttempt = await moderateAndInferWorryCategories(content);
-      if (firstAttempt.status === 'approved') {
-        res.json(firstAttempt);
-        return;
-      }
-
-      if (firstAttempt.status === 'rejected') {
-        console.log("Worry processing moderation rejection.");
-        res.json(firstAttempt);
-        return;
-      }
-
-      const secondAttempt = await moderateAndInferWorryCategories(content, true);
-      if (secondAttempt.status === 'approved') {
-        res.json(secondAttempt);
-        return;
-      }
-
-      if (secondAttempt.status === 'rejected') {
-        console.log("Worry processing moderation rejection.");
-        res.json(secondAttempt);
-        return;
-      }
-
-      console.log("Worry processing category inference failure after retries.");
-      res.json({ status: "rejected", reason: "카테고리를 결정하지 못했습니다. 잠시 후 다시 시도해주세요." });
+      const result = await processWorryModerationResponse(
+        req.body?.content,
+        moderateAndInferWorryCategories
+      );
+      res.status(result.statusCode).json(result.body);
     } catch (error: any) {
-      // True provider/runtime exceptions are the only path to HTTP 500 system failure.
       console.error("Worry processing backend/system exception:", error?.message || error);
-      res.status(500).json({ status: "rejected", reason: "오류가 발생했습니다. 잠시 후 다시 시도해주세요." });
+      res.status(502).json({ error: "Worry moderation provider failure" });
     }
   });
 
@@ -415,11 +343,13 @@ Return JSON: { "content": "Your reply here" }`;
    - If bad: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
    - If good: { "status": "approved" }`;
 
-      const resultObj = await fetchFromOpenRouter(systemInstruction, content);
-      res.json(resultObj);
+      const result = await processSimpleModerationResponse(content, replyContent =>
+        fetchFromOpenRouter(systemInstruction, replyContent)
+      );
+      res.status(result.statusCode).json(result.body);
     } catch (error: any) {
       console.error("Reply Filter Error:", error?.message || error);
-      res.status(500).json({ error: "Internal Server Error" });
+      res.status(502).json({ error: "Reply moderation provider failure" });
     }
   });
 
@@ -434,11 +364,13 @@ Return JSON: { "content": "Your reply here" }`;
    - If bad: { "status": "rejected", "reason": "부적절한 표현이 감지되었습니다." }
    - If good: { "status": "approved" }`;
 
-      const resultObj = await fetchFromOpenRouter(systemInstruction, content);
-      res.json(resultObj);
+      const result = await processSimpleModerationResponse(content, commentContent =>
+        fetchFromOpenRouter(systemInstruction, commentContent)
+      );
+      res.status(result.statusCode).json(result.body);
     } catch (error: any) {
       console.error("Comment Filter Error:", error?.message || error);
-      res.status(500).json({ error: "Internal Server Error" });
+      res.status(502).json({ error: "Comment moderation provider failure" });
     }
   });
 

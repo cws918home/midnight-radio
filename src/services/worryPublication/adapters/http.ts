@@ -1,4 +1,5 @@
 import type { DeliveryRecipient } from '@midnight-radio/domain';
+import { normalizeWorryModeration } from '../../moderation/normalize';
 import type { ModerationResult } from '../types';
 
 export async function moderateWorryViaHttp(content: string): Promise<ModerationResult> {
@@ -12,7 +13,12 @@ export async function moderateWorryViaHttp(content: string): Promise<ModerationR
     throw new Error(`process-worry HTTP ${response.status}`);
   }
 
-  return await response.json();
+  const result = normalizeWorryModeration(await response.json());
+  if (result.status === 'invalid') {
+    throw new Error('Invalid process-worry response');
+  }
+
+  return result;
 }
 
 export async function scheduleBotReplyViaHttp(params: {

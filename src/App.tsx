@@ -55,7 +55,7 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
-import { generateAIReply } from './services/geminiService';
+import { generateAIReply } from './services/llmClient';
 import {
   createReplyPublicationAdapters,
   publishPublisherComment,
