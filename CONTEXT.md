@@ -22,6 +22,7 @@ This document captures the current client-side worry publication behavior before
 - Post-letter side effects are assembled as one domain-level `runPublicationFollowUps` operation.
 - Bot reply scheduling still applies only to created letters whose selected recipient uid starts with `bot_`.
 - New-worry notification still targets all selected recipient ids.
+- Bot reply scheduling and new-worry notification failures are non-fatal and are returned as publication warnings.
 
 ## Moderation Normalization
 
