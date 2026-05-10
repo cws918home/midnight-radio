@@ -30,7 +30,11 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
-import { processWorry, processReply, generateAIReply, processComment } from './services/geminiService';
+import { processReply, generateAIReply, processComment } from './services/geminiService';
+import { publishWorry as publishWorryUseCase } from './services/worryPublication';
+import { createFisherYatesShuffle } from './services/worryPublication/adapters/random';
+import { moderateWorryViaHttp, notifyNewWorryViaHttp, scheduleBotReplyViaHttp } from './services/worryPublication/adapters/http';
+import { createFirestorePublicationGroupId, createWorryLettersInFirestore, fetchActiveHumansFromFirestore } from './services/worryPublication/adapters/firestore';
 
 // --- Constants ---
 const CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래', '잡담'];
@@ -89,13 +93,7 @@ const PUSH_INSTANCE_ID_STORAGE_KEY = 'galpi:push-instance-id';
 const PUSH_LAST_TOKEN_STORAGE_KEY = 'galpi:push-last-known-fcm-token';
 const PUSH_LAST_UID_STORAGE_KEY = 'galpi:push-last-known-fcm-uid';
 const PUSH_CONFIRMATION_COOLDOWN_MS = 90_000;
-const AI_BOT_PROFILES = [
-  { uid: 'bot_empathy', gender: 'female', interests: [] as string[] },
-  { uid: 'bot_logic', gender: 'male', interests: [] as string[] },
-  { uid: 'bot_friend', gender: 'hidden', interests: [] as string[] }
-] as const;
 
-type MatchSelectionType = 'matched' | 'random_fallback' | 'ai' | 'ai_safety_fallback';
 type PushRegistrationStatus = 'idle' | 'registering' | 'registered' | 'failed' | 'missing_token_doc';
 type PushRecoveryReason =
   | 'auth-restored'
@@ -136,12 +134,6 @@ interface PushRecoveryResult {
   error?: string;
 }
 
-type DeliveryRecipient = Pick<UserProfile, 'uid' | 'gender' | 'interests'> & {
-  matchOverlapCount: number;
-  matchSelectionType: MatchSelectionType;
-  matchCategoriesSnapshot: string[];
-};
-
 const getLetterCategories = (letter: Letter) =>
   (letter.categories ?? (letter.category ? [letter.category] : [])).filter(Boolean) as string[];
 
@@ -150,74 +142,6 @@ const isAiGeneratedReply = (letter: Pick<Letter, 'senderId' | 'isAiGenerated'>) 
 
 const getTimestampMillis = (timestamp?: Timestamp | null) =>
   timestamp && typeof timestamp.toMillis === 'function' ? timestamp.toMillis() : null;
-
-const shuffleArray = <T,>(items: T[]) => {
-  const shuffled = [...items];
-  for (let i = shuffled.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-};
-
-const countCategoryOverlap = (candidateInterests: string[] = [], inferredCategories: string[]) =>
-  candidateInterests.filter(interest => inferredCategories.includes(interest)).length;
-
-const appendRecipientIfUnselected = (
-  selectedRecipients: DeliveryRecipient[],
-  recipient: DeliveryRecipient
-) => {
-  if (selectedRecipients.some(selected => selected.uid === recipient.uid)) {
-    return false;
-  }
-
-  selectedRecipients.push(recipient);
-  return true;
-};
-
-const takeRandomUnselectedHumans = (
-  humans: UserProfile[],
-  selectedRecipients: DeliveryRecipient[],
-  count: number,
-  inferredCategories: string[]
-) => {
-  const selectedIds = new Set(selectedRecipients.map(({ uid }) => uid));
-
-  return shuffleArray(humans)
-    .filter(human => !selectedIds.has(human.uid))
-    .filter(human => countCategoryOverlap(human.interests || [], inferredCategories) === 0)
-    .slice(0, count)
-    .map<DeliveryRecipient>(human => ({
-      uid: human.uid,
-      gender: human.gender,
-      interests: human.interests || [],
-      matchOverlapCount: 0,
-      matchSelectionType: 'random_fallback',
-      matchCategoriesSnapshot: [...inferredCategories],
-    }));
-};
-
-const getNextUnselectedAiRecipient = (
-  selectedRecipients: DeliveryRecipient[],
-  selectionType: Extract<MatchSelectionType, 'ai' | 'ai_safety_fallback'>,
-  inferredCategories: string[]
-): DeliveryRecipient => {
-  const selectedIds = new Set(selectedRecipients.map(({ uid }) => uid));
-  const nextBot = AI_BOT_PROFILES.find(bot => !selectedIds.has(bot.uid));
-
-  if (!nextBot) {
-    throw new Error('No unselected AI bot available for worry routing.');
-  }
-
-  return {
-    uid: nextBot.uid,
-    gender: nextBot.gender,
-    interests: [...inferredCategories],
-    matchOverlapCount: 0,
-    matchSelectionType: selectionType,
-    matchCategoriesSnapshot: [...inferredCategories],
-  };
-};
 
 const buildLegacyPublicationFingerprint = (letter: Letter) => {
   const normalizedCategories = [...getLetterCategories(letter)].sort().join('|');
@@ -1657,171 +1581,48 @@ export default function App() {
 
   const [filterAlert, setFilterAlert] = useState<string | null>(null);
 
-  // 1. Publish Worry -> Filter Check then Local Matching
   const publishWorry = async (content: string) => {
     if (!user || !profile) {
       setFilterAlert("로그인 정보가 없습니다.");
       return;
     }
+
     setIsProcessing(true);
     try {
-      console.log("Starting worry publication process (Optimized)...");
+      const result = await publishWorryUseCase({
+        authorUid: user.uid,
+        content,
+        adapters: {
+          moderateWorry: moderateWorryViaHttp,
+          fetchActiveHumans: ({ activeSince, limit }) =>
+            fetchActiveHumansFromFirestore({
+              db,
+              activeSince,
+              limitCount: limit,
+            }),
+          createPublicationGroupId: () => createFirestorePublicationGroupId(db),
+          createWorryLetters: params => createWorryLettersInFirestore({ db, ...params }),
+          scheduleBotReply: scheduleBotReplyViaHttp,
+          notifyNewWorry: notifyNewWorryViaHttp,
+          now: () => new Date(),
+          shuffle: createFisherYatesShuffle(Math.random),
+        },
+      });
 
-      // Step 1 & 2 in PARALLEL: worry moderation/category inference + fetch active users
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      
-      const [worryResult, usersSnap] = await Promise.all([
-        processWorry(content),
-        getDocs(query(
-          collection(db, 'users'), 
-          where('lastActive', '>=', Timestamp.fromDate(oneDayAgo)),
-          limit(50)
-        ))
-      ]);
-
-      if (worryResult.status !== 'approved') {
-        setFilterAlert(worryResult.reason || "오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
-        setIsProcessing(false);
+      if (result.status === 'rejected') {
+        setFilterAlert(result.reason || "오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
         return;
       }
 
-      const inferredCategories = worryResult.categories;
-      const allHumanUsers = usersSnap.docs
-        .map(d => d.data() as UserProfile)
-        .filter(u => u.uid !== user.uid);
-
-      console.log(`Matching from ${allHumanUsers.length} active users.`);
-
-      const humansByOverlap = new Map<number, UserProfile[]>();
-      for (const human of allHumanUsers) {
-        const overlapCount = countCategoryOverlap(human.interests || [], inferredCategories);
-        if (overlapCount <= 0) continue;
-
-        const group = humansByOverlap.get(overlapCount) ?? [];
-        group.push(human);
-        humansByOverlap.set(overlapCount, group);
+      if (result.status === 'failed') {
+        setFilterAlert(`전송 실패: ${result.reason || "알 수 없는 오류"}`);
+        return;
       }
 
-      const selectedRecipients: DeliveryRecipient[] = [];
-      const sortedOverlapCounts = [...humansByOverlap.keys()].sort((a, b) => b - a);
-
-      for (const overlapCount of sortedOverlapCounts) {
-        const group = humansByOverlap.get(overlapCount);
-        if (!group) continue;
-
-        for (const candidate of shuffleArray(group)) {
-          appendRecipientIfUnselected(selectedRecipients, {
-            uid: candidate.uid,
-            gender: candidate.gender,
-            interests: candidate.interests || [],
-            matchOverlapCount: overlapCount,
-            matchSelectionType: 'matched',
-            matchCategoriesSnapshot: [...inferredCategories],
-          });
-
-          if (selectedRecipients.length === 3) {
-            break;
-          }
-        }
-
-        if (selectedRecipients.length === 3) {
-          break;
-        }
+      if (result.warnings.length > 0) {
+        console.warn("Worry publication completed with warnings:", result.warnings);
       }
 
-      const matchedSelectedCount = selectedRecipients.length;
-
-      if (matchedSelectedCount < 3) {
-        appendRecipientIfUnselected(
-          selectedRecipients,
-          getNextUnselectedAiRecipient(selectedRecipients, 'ai', inferredCategories)
-        );
-
-        const fallbackHumanSlots =
-          matchedSelectedCount === 1
-            ? 1
-            : matchedSelectedCount === 0
-              ? 2
-              : 0;
-
-        const randomFallbackHumans = takeRandomUnselectedHumans(
-          allHumanUsers,
-          selectedRecipients,
-          fallbackHumanSlots,
-          inferredCategories
-        );
-
-        for (const recipient of randomFallbackHumans) {
-          appendRecipientIfUnselected(selectedRecipients, recipient);
-        }
-
-        while (selectedRecipients.length < 3) {
-          appendRecipientIfUnselected(
-            selectedRecipients,
-            getNextUnselectedAiRecipient(selectedRecipients, 'ai_safety_fallback', inferredCategories)
-          );
-        }
-      }
-
-      const assignedIds = selectedRecipients.map(candidate => candidate.uid);
-      const publicationGroupId = doc(collection(db, 'letters')).id;
-      console.log("Assigned Recipients:", assignedIds);
-
-      // Step 3: Save to Firestore
-      // Use a simpler map without waiting for individual AI generations inside Promise.all
-      await Promise.all(selectedRecipients.map(async (recipient) => {
-        const receiverId = recipient.uid;
-        
-        // 1. Save the Worry (This is the only part we MUST wait for)
-        const worryRef = await addDoc(collection(db, 'letters'), {
-          senderId: user.uid,
-          receiverId, 
-          originalContent: content,
-          refinedContent: content, 
-          type: 'worry',
-          categories: inferredCategories,
-          category: inferredCategories[0],
-          publicationGroupId,
-          matchOverlapCount: recipient.matchOverlapCount,
-          matchSelectionType: recipient.matchSelectionType,
-          matchCategoriesSnapshot: [...recipient.matchCategoriesSnapshot],
-          createdAt: serverTimestamp(),
-          isRead: false
-        });
-
-        // 2. Trigger AI reply scheduling (Server-side delay)
-        if (receiverId.startsWith('bot_')) {
-          try {
-            console.log(`[Client] Scheduling AI reply for ${receiverId}...`);
-            fetch('/api/schedule-bot-reply', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                worryId: worryRef.id,
-                worryContent: content,
-                receiverId: user.uid,
-                botInfo: recipient
-              })
-            });
-          } catch (botErr) {
-            console.error(`[Client] AI bot scheduling failed for ${receiverId}:`, botErr);
-          }
-        }
-
-      }));
-
-      // Step 4: Notify recipients via Push Notification
-      try {
-        await fetch('/api/notify-new-worry', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ receiverUids: assignedIds })
-        });
-      } catch (notifyErr) {
-        console.error("Notification failed", notifyErr);
-      }
-
-      console.log("Worry submission successful.");
       setView('home');
       window.scrollTo(0, 0);
     } catch (e: any) {
