@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { HumanProfile } from '../../../../packages/domain/src';
+import type { HumanProfile } from '@midnight-radio/domain';
 import {
   ACTIVE_HUMAN_QUERY_LIMIT,
   filterEligibleHumans,
@@ -67,7 +67,7 @@ test('same-overlap tie-breaking is deterministic with injected shuffle', () => {
   assert.deepEqual(result.recipients.map(({ uid }) => uid), ['third', 'second', 'first']);
 });
 
-test('matched count 2 adds one ai bot and no random fallback human', () => {
+test('fallback policy: matched count 2 adds one ai bot and no random fallback human', () => {
   const result = selectWorryRecipients({
     humans: [
       human('matched-a', ['취업']),
@@ -89,7 +89,7 @@ test('matched count 2 adds one ai bot and no random fallback human', () => {
   );
 });
 
-test('matched count 1 adds ai, one random fallback human, then safety bots if needed', () => {
+test('fallback policy: matched count 1 adds ai, one random fallback human, then safety bots if needed', () => {
   const result = selectWorryRecipients({
     humans: [
       human('matched', ['취업']),
@@ -111,7 +111,7 @@ test('matched count 1 adds ai, one random fallback human, then safety bots if ne
   );
 });
 
-test('matched count 0 adds ai, up to two random fallback humans, then safety bots if needed', () => {
+test('fallback policy: matched count 0 adds ai, up to two random fallback humans, then safety bots if needed', () => {
   const result = selectWorryRecipients({
     humans: [
       human('fallback-a', ['건강']),

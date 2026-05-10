@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { CreatedWorryLetterMetadata, DeliveryRecipient, HumanProfile } from '../../../packages/domain/src';
+import type {
+  CreatedWorryLetterMetadata,
+  DeliveryRecipient,
+  HumanProfile,
+} from '@midnight-radio/domain';
 import { publishWorry } from './publishWorry';
 import type { ModerationResult, WorryPublicationAdapters } from './types';
 
@@ -54,7 +58,10 @@ function createAdapters(overrides: Partial<WorryPublicationAdapters> = {}) {
 
 test('moderation rejection returns rejected and creates no letters', async () => {
   const { adapters, calls } = createAdapters({
-    moderateWorry: async (): Promise<ModerationResult> => ({ status: 'rejected', reason: 'blocked' }),
+    moderateWorry: async (): Promise<ModerationResult> => ({
+      status: 'rejected',
+      reason: 'blocked',
+    }),
   });
 
   const result = await publishWorry({ authorUid: 'author', content: 'content', adapters });
@@ -100,8 +107,14 @@ test('successful publication creates one letter per selected recipient with one 
 
   assert.equal(result.createdLetters.length, 3);
   assert.equal(result.publicationGroupId, 'group-1');
-  assert.deepEqual([...new Set(result.createdLetters.map(({ publicationGroupId }) => publicationGroupId))], ['group-1']);
-  assert.deepEqual(result.createdLetters.map(({ receiverId }) => receiverId), ['human-a', 'human-b', 'human-c']);
+  assert.deepEqual(
+    [...new Set(result.createdLetters.map(({ publicationGroupId }) => publicationGroupId))],
+    ['group-1']
+  );
+  assert.deepEqual(
+    result.createdLetters.map(({ receiverId }) => receiverId),
+    ['human-a', 'human-b', 'human-c']
+  );
 });
 
 test('batch creation failure returns failed and skips bot scheduling and notification', async () => {
@@ -115,7 +128,11 @@ test('batch creation failure returns failed and skips bot scheduling and notific
 
   const result = await publishWorry({ authorUid: 'author', content: 'content', adapters });
 
-  assert.deepEqual(result, { status: 'failed', stage: 'letter_creation', reason: 'commit failed' });
+  assert.deepEqual(result, {
+    status: 'failed',
+    stage: 'letter_creation',
+    reason: 'commit failed',
+  });
   assert.equal(calls.scheduleBotReply.length, 0);
   assert.equal(calls.notifyNewWorry.length, 0);
 });
@@ -137,6 +154,8 @@ test('bot scheduling and notification failures appear in published warnings', as
   if (result.status !== 'published') return;
 
   assert.equal(result.warnings.length, 4);
-  assert.ok(result.warnings.some(warning => warning.startsWith('bot_scheduling_failed:bot_empathy')));
+  assert.ok(
+    result.warnings.some(warning => warning.startsWith('bot_scheduling_failed:bot_empathy'))
+  );
   assert.ok(result.warnings.includes('notification_failed:notify failed'));
 });

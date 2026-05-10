@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
@@ -14,6 +17,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.50.1",
+    "@midnight-radio/domain": "workspace:*",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "clsx": "^2.1.1",

@@ -10,18 +10,24 @@ import {
   writeBatch,
   type Firestore,
 } from 'firebase/firestore';
-import type { CreatedWorryLetterMetadata, DeliveryRecipient, HumanProfile } from '../../../../packages/domain/src';
+import type {
+  CreatedWorryLetterMetadata,
+  DeliveryRecipient,
+  HumanProfile,
+} from '@midnight-radio/domain';
 
 export async function fetchActiveHumansFromFirestore(params: {
   db: Firestore;
   activeSince: Date;
   limitCount: number;
 }): Promise<HumanProfile[]> {
-  const usersSnap = await getDocs(query(
-    collection(params.db, 'users'),
-    where('lastActive', '>=', Timestamp.fromDate(params.activeSince)),
-    limit(params.limitCount)
-  ));
+  const usersSnap = await getDocs(
+    query(
+      collection(params.db, 'users'),
+      where('lastActive', '>=', Timestamp.fromDate(params.activeSince)),
+      limit(params.limitCount)
+    )
+  );
 
   return usersSnap.docs.map(d => {
     const data = d.data() as HumanProfile;

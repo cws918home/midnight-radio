@@ -1,4 +1,4 @@
-import type { DeliveryRecipient } from '../../../../packages/domain/src';
+import type { DeliveryRecipient } from '@midnight-radio/domain';
 import type { ModerationResult } from '../types';
 
 export async function moderateWorryViaHttp(content: string): Promise<ModerationResult> {

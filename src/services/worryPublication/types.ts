@@ -1,4 +1,8 @@
-import type { CreatedWorryLetterMetadata, DeliveryRecipient, HumanProfile } from '../../../packages/domain/src';
+import type {
+  CreatedWorryLetterMetadata,
+  DeliveryRecipient,
+  HumanProfile,
+} from '@midnight-radio/domain';
 import type { Shuffle } from './policy/recipientSelection';
 
 export type ModerationResult =
@@ -23,7 +27,11 @@ export type PublishWorryFailureStage =
 
 export interface WorryPublicationAdapters {
   moderateWorry(content: string): Promise<ModerationResult>;
-  fetchActiveHumans(params: { authorUid: string; activeSince: Date; limit: number }): Promise<HumanProfile[]>;
+  fetchActiveHumans(params: {
+    authorUid: string;
+    activeSince: Date;
+    limit: number;
+  }): Promise<HumanProfile[]>;
   createPublicationGroupId(): string;
   createWorryLetters(params: {
     authorUid: string;
@@ -38,7 +46,9 @@ export interface WorryPublicationAdapters {
     authorUid: string;
     botInfo: DeliveryRecipient;
   }): Promise<void>;
-  notifyNewWorry(params: { receiverUids: string[] }): Promise<void>;
+  notifyNewWorry(params: {
+    receiverUids: string[];
+  }): Promise<void>;
   now(): Date;
   shuffle: Shuffle;
 }

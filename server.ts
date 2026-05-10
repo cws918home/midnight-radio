@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 dotenv.config(); // Explicitly call config
 
 import express from "express";
+import { WORRY_CATEGORIES, WORRY_CATEGORY_SET } from "@midnight-radio/domain";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
@@ -41,8 +42,6 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
 
 const db = getApps().length > 0 ? getFirestore(firestoreDatabaseId) : null;
 const messaging = getApps().length > 0 ? getMessaging() : null;
-const WORRY_CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래', '잡담'] as const;
-const WORRY_CATEGORY_SET = new Set<string>(WORRY_CATEGORIES);
 const INVALID_PUSH_TOKEN_ERROR_CODES = new Set([
   'messaging/invalid-registration-token',
   'messaging/registration-token-not-registered',

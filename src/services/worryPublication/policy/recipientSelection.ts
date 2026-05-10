@@ -1,4 +1,8 @@
-import type { DeliveryRecipient, HumanProfile, MatchSelectionType } from '../../../../packages/domain/src';
+import type {
+  DeliveryRecipient,
+  HumanProfile,
+  MatchSelectionType,
+} from '@midnight-radio/domain';
 
 export const TARGET_RECIPIENT_COUNT = 3;
 export const ACTIVE_HUMAN_QUERY_LIMIT = 50;
@@ -16,7 +20,10 @@ export type RecipientSelectionResult =
   | { status: 'selected'; recipients: DeliveryRecipient[] }
   | { status: 'invariant_failed'; reason: string };
 
-export const countCategoryOverlap = (candidateInterests: string[] = [], inferredCategories: string[]) =>
+export const countCategoryOverlap = (
+  candidateInterests: string[] = [],
+  inferredCategories: string[]
+) =>
   candidateInterests.filter(interest => inferredCategories.includes(interest)).length;
 
 export const getActiveHumanCutoff = (now: Date) =>

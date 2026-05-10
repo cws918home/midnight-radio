@@ -1,17 +1,24 @@
-import { useState, useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { 
-  onAuthStateChanged, 
+import {
+  useState,
+  useEffect,
+  useRef,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react';
+import { WORRY_CATEGORIES } from '@midnight-radio/domain';
+import {
+  onAuthStateChanged,
   signInWithPopup,
   User as FirebaseUser,
-  signOut
+  signOut,
 } from 'firebase/auth';
-import { 
-  collection, 
-  addDoc, 
-  query, 
-  where, 
-  onSnapshot, 
-  serverTimestamp, 
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  onSnapshot,
+  serverTimestamp,
   doc,
   updateDoc,
   deleteDoc,
@@ -20,28 +27,55 @@ import {
   Timestamp,
   setDoc,
   getDoc,
-  getDocs
+  getDocs,
 } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
 import { auth, db, googleProvider, messaging } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Send, Inbox, ArrowLeft, Radio, Headphones, Mic2, Signal, RadioReceiver, Heart, Loader2, Sparkles, MessageSquare, CheckCircle2, XCircle, Settings, ThumbsUp, FileText, Bell, Share2, QrCode
+import {
+  Send,
+  Inbox,
+  ArrowLeft,
+  Radio,
+  Headphones,
+  Mic2,
+  Signal,
+  RadioReceiver,
+  Heart,
+  Loader2,
+  Sparkles,
+  MessageSquare,
+  CheckCircle2,
+  XCircle,
+  Settings,
+  ThumbsUp,
+  FileText,
+  Bell,
+  Share2,
+  QrCode,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
 import { processReply, generateAIReply, processComment } from './services/geminiService';
 import { publishWorry as publishWorryUseCase } from './services/worryPublication';
 import { createFisherYatesShuffle } from './services/worryPublication/adapters/random';
-import { moderateWorryViaHttp, notifyNewWorryViaHttp, scheduleBotReplyViaHttp } from './services/worryPublication/adapters/http';
-import { createFirestorePublicationGroupId, createWorryLettersInFirestore, fetchActiveHumansFromFirestore } from './services/worryPublication/adapters/firestore';
+import {
+  moderateWorryViaHttp,
+  notifyNewWorryViaHttp,
+  scheduleBotReplyViaHttp,
+} from './services/worryPublication/adapters/http';
+import {
+  createFirestorePublicationGroupId,
+  createWorryLettersInFirestore,
+  fetchActiveHumansFromFirestore,
+} from './services/worryPublication/adapters/firestore';
 
 // --- Constants ---
-const CATEGORIES = ['취업', '진로', '학업', '시험', '소득', '주거', '연애', '결혼', '부모', '자녀', '우울', '불안', '외로움', '직장', '워라밸', '외모', '자존감', '건강', '노후', '미래', '잡담'];
+const CATEGORIES = WORRY_CATEGORIES;
 const GENDERS = [
-  { id: 'male', label: '남성' }, 
-  { id: 'female', label: '여성' }, 
-  { id: 'hidden', label: '비공개' }
+  { id: 'male', label: '남성' },
+  { id: 'female', label: '여성' },
+  { id: 'hidden', label: '비공개' },
 ];
 
 // --- Types ---

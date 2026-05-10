@@ -1,4 +1,9 @@
-import { filterEligibleHumans, getActiveHumanCutoff, ACTIVE_HUMAN_QUERY_LIMIT, selectWorryRecipients } from './policy/recipientSelection';
+import {
+  ACTIVE_HUMAN_QUERY_LIMIT,
+  filterEligibleHumans,
+  getActiveHumanCutoff,
+  selectWorryRecipients,
+} from './policy/recipientSelection';
 import type { PublishWorryResult, WorryPublicationAdapters } from './types';
 
 const getErrorMessage = (error: unknown) =>
@@ -26,7 +31,11 @@ export async function publishWorry(params: {
       }),
     ]);
   } catch (error) {
-    return { status: 'failed', stage: 'moderation', reason: getErrorMessage(error) };
+    return {
+      status: 'failed',
+      stage: 'moderation',
+      reason: getErrorMessage(error),
+    };
   }
 
   if (moderationResult.status === 'rejected') {
@@ -60,7 +69,11 @@ export async function publishWorry(params: {
       recipients: selectionResult.recipients,
     });
   } catch (error) {
-    return { status: 'failed', stage: 'letter_creation', reason: getErrorMessage(error) };
+    return {
+      status: 'failed',
+      stage: 'letter_creation',
+      reason: getErrorMessage(error),
+    };
   }
 
   const warnings: string[] = [];
