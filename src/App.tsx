@@ -73,6 +73,10 @@ import {
   createWorryLettersInFirestore,
   fetchActiveHumansFromFirestore,
 } from './services/worryPublication/adapters/firestore';
+import {
+  buildSentPublicationGroups,
+  type SentPublicationGroup,
+} from './services/worryPublication/readModel';
 
 // --- Constants ---
 const CATEGORIES = WORRY_CATEGORIES;
@@ -113,16 +117,6 @@ interface Letter {
   matchCategoriesSnapshot?: string[];
 }
 
-interface SentPublicationGroup {
-  groupKey: string;
-  publicationGroupId?: string;
-  originalContent: string;
-  categories: string[];
-  createdAt: Timestamp | null;
-  letters: Letter[];
-}
-
-const LEGACY_PUBLICATION_WINDOW_MS = 15_000;
 const FCM_VAPID_KEY = 'BFHIR9z_IvTS-YS65CP7-JuEb2Q0psopN5-qzUcBhvg6RNLuc5QevbXyENEb7JyeBULPZSOUPE8r46dGEQDqI6M';
 const FALLBACK_MESSAGING_SW_URL = '/firebase-messaging-sw.js';
 const FALLBACK_MESSAGING_SW_SCOPE = '/firebase-cloud-messaging-push-scope';
@@ -172,131 +166,8 @@ interface PushRecoveryResult {
   error?: string;
 }
 
-const getLetterCategories = (letter: Letter) =>
-  (letter.categories ?? (letter.category ? [letter.category] : [])).filter(Boolean) as string[];
-
 const isAiGeneratedReply = (letter: Pick<Letter, 'senderId' | 'isAiGenerated'>) =>
   letter.isAiGenerated === true || letter.senderId.startsWith('bot_');
-
-const getTimestampMillis = (timestamp?: Timestamp | null) =>
-  timestamp && typeof timestamp.toMillis === 'function' ? timestamp.toMillis() : null;
-
-const buildLegacyPublicationFingerprint = (letter: Letter) => {
-  const normalizedCategories = [...getLetterCategories(letter)].sort().join('|');
-  return [letter.senderId, letter.originalContent, normalizedCategories].join('::');
-};
-
-const buildSentPublicationGroups = (letters: Letter[]): SentPublicationGroup[] => {
-  const publicationGroups = new Map<string, SentPublicationGroup>();
-  const legacyBuckets = new Map<string, Letter[]>();
-  const singletonGroups: SentPublicationGroup[] = [];
-
-  for (const letter of letters) {
-    if (letter.publicationGroupId) {
-      const groupKey = `group:${letter.publicationGroupId}`;
-      const existingGroup = publicationGroups.get(groupKey);
-
-      if (existingGroup) {
-        existingGroup.letters.push(letter);
-
-        const existingMillis = getTimestampMillis(existingGroup.createdAt);
-        const nextMillis = getTimestampMillis(letter.createdAt);
-        if (nextMillis !== null && (existingMillis === null || nextMillis > existingMillis)) {
-          existingGroup.createdAt = letter.createdAt;
-        }
-      } else {
-        publicationGroups.set(groupKey, {
-          groupKey,
-          publicationGroupId: letter.publicationGroupId,
-          originalContent: letter.originalContent,
-          categories: getLetterCategories(letter),
-          createdAt: letter.createdAt,
-          letters: [letter],
-        });
-      }
-      continue;
-    }
-
-    const createdAtMillis = getTimestampMillis(letter.createdAt);
-    if (createdAtMillis === null) {
-      singletonGroups.push({
-        groupKey: `legacy-single:${letter.id}`,
-        originalContent: letter.originalContent,
-        categories: getLetterCategories(letter),
-        createdAt: letter.createdAt ?? null,
-        letters: [letter],
-      });
-      continue;
-    }
-
-    const fingerprint = buildLegacyPublicationFingerprint(letter);
-    const bucket = legacyBuckets.get(fingerprint) ?? [];
-    bucket.push(letter);
-    legacyBuckets.set(fingerprint, bucket);
-  }
-
-  const legacyGroups: SentPublicationGroup[] = [];
-
-  for (const [fingerprint, bucket] of legacyBuckets) {
-    bucket.sort((a, b) => (getTimestampMillis(a.createdAt) ?? 0) - (getTimestampMillis(b.createdAt) ?? 0));
-
-    let anchorCreatedAtMillis: number | null = null;
-    let cluster: Letter[] = [];
-
-    const flushCluster = () => {
-      if (cluster.length === 0 || anchorCreatedAtMillis === null) return;
-
-      const latestLetter = cluster[cluster.length - 1];
-      legacyGroups.push({
-        groupKey: `legacy:${fingerprint}:${anchorCreatedAtMillis}`,
-        originalContent: cluster[0].originalContent,
-        categories: getLetterCategories(cluster[0]),
-        createdAt: latestLetter.createdAt,
-        letters: [...cluster],
-      });
-
-      cluster = [];
-      anchorCreatedAtMillis = null;
-    };
-
-    for (const letter of bucket) {
-      const createdAtMillis = getTimestampMillis(letter.createdAt);
-
-      if (createdAtMillis === null) {
-        flushCluster();
-        singletonGroups.push({
-          groupKey: `legacy-single:${letter.id}`,
-          originalContent: letter.originalContent,
-          categories: getLetterCategories(letter),
-          createdAt: letter.createdAt ?? null,
-          letters: [letter],
-        });
-        continue;
-      }
-
-      if (anchorCreatedAtMillis === null) {
-        anchorCreatedAtMillis = createdAtMillis;
-        cluster = [letter];
-        continue;
-      }
-
-      if (createdAtMillis - anchorCreatedAtMillis <= LEGACY_PUBLICATION_WINDOW_MS) {
-        cluster.push(letter);
-        continue;
-      }
-
-      flushCluster();
-      anchorCreatedAtMillis = createdAtMillis;
-      cluster = [letter];
-    }
-
-    flushCluster();
-  }
-
-  return [...publicationGroups.values(), ...legacyGroups, ...singletonGroups].sort((a, b) => {
-    return (getTimestampMillis(b.createdAt) ?? 0) - (getTimestampMillis(a.createdAt) ?? 0);
-  });
-};
 
 const isInstalledPWA = () => {
   if (typeof window === 'undefined') return false;
@@ -1741,7 +1612,7 @@ export default function App() {
   };
 
   const unreadRepliesCount = inboxReplies.filter(r => !r.isRead).length;
-  const groupedMyWorries = buildSentPublicationGroups(myWorries);
+  const groupedMyWorries: SentPublicationGroup[] = buildSentPublicationGroups(myWorries);
   const profileInterests = profile?.interests ?? [];
   const visibleHomeInterestBadgeText = profileInterests.slice(0, 5).join(', ');
   const homeInterestBadgeText = profileInterests.length === 0

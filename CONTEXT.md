@@ -16,3 +16,16 @@ This document captures the current client-side worry publication behavior before
 - Remaining slots are filled with unselected AI bots as `ai_safety_fallback`.
 - Firestore letter fields remain compatible, including both `categories` and legacy `category`.
 - `/api/process-worry`, `/api/schedule-bot-reply`, and `/api/notify-new-worry` payload shapes remain unchanged.
+
+## Sent Worry Publication Read-Model
+
+Sent Worry publication history is grouped by a pure read-model before rendering.
+
+- Letters with `publicationGroupId` are grouped by that id.
+- For `publicationGroupId` groups, the first encountered letter supplies the displayed `originalContent` and `categories`; the newest usable timestamp becomes the group `createdAt`.
+- Legacy letters without `publicationGroupId` are grouped by `senderId`, `originalContent`, and a sorted category fingerprint.
+- Legacy groups are clustered within the existing 15-second publication window.
+- Legacy buckets are sorted by timestamp before clustering.
+- Empty `categories: []` wins over legacy `category` and later renders through the existing fallback behavior.
+- Missing, null, or no-`toMillis` timestamps are treated as singleton groups.
+- Existing Firestore query behavior and sent-history rendering behavior remain unchanged.
