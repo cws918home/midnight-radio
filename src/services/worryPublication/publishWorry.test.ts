@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {
   CreatedWorryLetterMetadata,
-  DeliveryRecipient,
   HumanProfile,
 } from '@midnight-radio/domain';
 import { publishWorry } from './publishWorry';
@@ -19,8 +18,7 @@ const human = (uid: string, interests: string[]): HumanProfile => ({
 function createAdapters(overrides: Partial<WorryPublicationAdapters> = {}) {
   const calls = {
     createWorryLetters: [] as unknown[],
-    scheduleBotReply: [] as unknown[],
-    notifyNewWorry: [] as unknown[],
+    runPublicationFollowUps: [] as unknown[],
   };
 
   const adapters: WorryPublicationAdapters = {
@@ -42,11 +40,9 @@ function createAdapters(overrides: Partial<WorryPublicationAdapters> = {}) {
         matchCategoriesSnapshot: [...recipient.matchCategoriesSnapshot],
       }));
     },
-    scheduleBotReply: async params => {
-      calls.scheduleBotReply.push(params);
-    },
-    notifyNewWorry: async params => {
-      calls.notifyNewWorry.push(params);
+    runPublicationFollowUps: async params => {
+      calls.runPublicationFollowUps.push(params);
+      return [];
     },
     now: () => new Date('2026-05-10T00:00:00.000Z'),
     shuffle: identityShuffle,
@@ -117,7 +113,7 @@ test('successful publication creates one letter per selected recipient with one 
   );
 });
 
-test('batch creation failure returns failed and skips bot scheduling and notification', async () => {
+test('letter creation failure returns failed and skips follow-up', async () => {
   const { adapters, calls } = createAdapters({
     fetchActiveHumans: async () => [],
     createWorryLetters: async () => {
@@ -133,19 +129,15 @@ test('batch creation failure returns failed and skips bot scheduling and notific
     stage: 'letter_creation',
     reason: 'commit failed',
   });
-  assert.equal(calls.scheduleBotReply.length, 0);
-  assert.equal(calls.notifyNewWorry.length, 0);
+  assert.equal(calls.runPublicationFollowUps.length, 0);
 });
 
-test('bot scheduling and notification failures appear in published warnings', async () => {
+test('follow-up warnings are returned unchanged', async () => {
   const { adapters } = createAdapters({
-    fetchActiveHumans: async () => [],
-    scheduleBotReply: async () => {
-      throw new Error('bot failed');
-    },
-    notifyNewWorry: async () => {
-      throw new Error('notify failed');
-    },
+    runPublicationFollowUps: async () => [
+      'bot_scheduling_failed:bot_empathy:bot failed',
+      'notification_failed:notify failed',
+    ],
   });
 
   const result = await publishWorry({ authorUid: 'author', content: 'content', adapters });
@@ -153,9 +145,8 @@ test('bot scheduling and notification failures appear in published warnings', as
   assert.equal(result.status, 'published');
   if (result.status !== 'published') return;
 
-  assert.equal(result.warnings.length, 4);
-  assert.ok(
-    result.warnings.some(warning => warning.startsWith('bot_scheduling_failed:bot_empathy'))
-  );
-  assert.ok(result.warnings.includes('notification_failed:notify failed'));
+  assert.deepEqual(result.warnings, [
+    'bot_scheduling_failed:bot_empathy:bot failed',
+    'notification_failed:notify failed',
+  ]);
 });

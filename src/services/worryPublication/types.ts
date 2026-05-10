@@ -40,15 +40,12 @@ export interface WorryPublicationAdapters {
     publicationGroupId: string;
     recipients: DeliveryRecipient[];
   }): Promise<CreatedWorryLetterMetadata[]>;
-  scheduleBotReply(params: {
-    worryId: string;
-    worryContent: string;
+  runPublicationFollowUps(params: {
     authorUid: string;
-    botInfo: DeliveryRecipient;
-  }): Promise<void>;
-  notifyNewWorry(params: {
-    receiverUids: string[];
-  }): Promise<void>;
+    worryContent: string;
+    recipients: DeliveryRecipient[];
+    createdLetters: CreatedWorryLetterMetadata[];
+  }): Promise<string[]>;
   now(): Date;
   shuffle: Shuffle;
 }

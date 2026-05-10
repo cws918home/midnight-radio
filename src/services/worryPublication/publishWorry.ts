@@ -76,31 +76,12 @@ export async function publishWorry(params: {
     };
   }
 
-  const warnings: string[] = [];
-
-  for (const letter of createdLetters) {
-    const recipient = selectionResult.recipients.find(({ uid }) => uid === letter.receiverId);
-    if (!recipient || !recipient.uid.startsWith('bot_')) continue;
-
-    try {
-      await adapters.scheduleBotReply({
-        worryId: letter.id,
-        worryContent: content,
-        authorUid,
-        botInfo: recipient,
-      });
-    } catch (error) {
-      warnings.push(`bot_scheduling_failed:${recipient.uid}:${getErrorMessage(error)}`);
-    }
-  }
-
-  try {
-    await adapters.notifyNewWorry({
-      receiverUids: selectionResult.recipients.map(({ uid }) => uid),
-    });
-  } catch (error) {
-    warnings.push(`notification_failed:${getErrorMessage(error)}`);
-  }
+  const warnings = await adapters.runPublicationFollowUps({
+    authorUid,
+    worryContent: content,
+    recipients: selectionResult.recipients,
+    createdLetters,
+  });
 
   return {
     status: 'published',

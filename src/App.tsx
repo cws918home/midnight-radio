@@ -61,7 +61,10 @@ import {
   publishPublisherComment,
   publishReply,
 } from './services/replyPublication';
-import { publishWorry as publishWorryUseCase } from './services/worryPublication';
+import {
+  createPublicationFollowUpRunner,
+  publishWorry as publishWorryUseCase,
+} from './services/worryPublication';
 import { createFisherYatesShuffle } from './services/worryPublication/adapters/random';
 import {
   moderateWorryViaHttp,
@@ -1511,8 +1514,10 @@ export default function App() {
             }),
           createPublicationGroupId: () => createFirestorePublicationGroupId(db),
           createWorryLetters: params => createWorryLettersInFirestore({ db, ...params }),
-          scheduleBotReply: scheduleBotReplyViaHttp,
-          notifyNewWorry: notifyNewWorryViaHttp,
+          runPublicationFollowUps: createPublicationFollowUpRunner({
+            scheduleBotReply: scheduleBotReplyViaHttp,
+            notifyNewWorry: notifyNewWorryViaHttp,
+          }),
           now: () => new Date(),
           shuffle: createFisherYatesShuffle(Math.random),
         },

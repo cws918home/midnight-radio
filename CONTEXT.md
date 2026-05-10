@@ -17,6 +17,12 @@ This document captures the current client-side worry publication behavior before
 - Firestore letter fields remain compatible, including both `categories` and legacy `category`.
 - `/api/process-worry`, `/api/schedule-bot-reply`, and `/api/notify-new-worry` payload shapes remain unchanged.
 
+## Worry Publication Follow-up
+
+- Post-letter side effects are assembled as one domain-level `runPublicationFollowUps` operation.
+- Bot reply scheduling still applies only to created letters whose selected recipient uid starts with `bot_`.
+- New-worry notification still targets all selected recipient ids.
+
 ## Moderation Normalization
 
 - Provider moderation output is untrusted until normalized.
