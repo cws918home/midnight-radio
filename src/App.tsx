@@ -57,10 +57,9 @@ import { QRCodeSVG } from 'qrcode.react';
 import { cn } from './lib/utils';
 import { generateAIReply } from './services/llmClient';
 import {
-  createReplyPublicationAdapters,
-  publishPublisherComment,
-  publishReply,
-} from './services/replyPublication';
+  publishPublisherCommentWithProductionAdapters,
+  publishReplyWithProductionAdapters,
+} from './services/replyPublication/production';
 import {
   publishWorryWithProductionAdapters,
 } from './services/worryPublication/production';
@@ -495,11 +494,10 @@ export default function App() {
     if (!user) return;
     setIsProcessing(true);
     try {
-      const result = await publishReply({
+      const result = await publishReplyWithProductionAdapters({
         authorUid: user.uid,
         content,
         worry,
-        adapters: createReplyPublicationAdapters(db),
       });
 
       if (result.type === 'rejected') {
@@ -1321,11 +1319,10 @@ function CommentForm({ replyId, replierId, onCommentAdded }: { replyId: string, 
     if (!isLengthValid) return;
     setIsProcessing(true);
     try {
-      const result = await publishPublisherComment({
+      const result = await publishPublisherCommentWithProductionAdapters({
         replyId,
         replierId,
         content,
-        adapters: createReplyPublicationAdapters(db),
       });
 
       if (result.type === 'rejected') {

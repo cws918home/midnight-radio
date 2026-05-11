@@ -61,6 +61,42 @@ Sent Worry publication history is grouped by a pure read-model before rendering.
 - Missing, null, or no-`toMillis` timestamps are treated as singleton groups.
 - Existing Firestore query behavior and sent-history rendering behavior remain unchanged.
 
+# Reply Publication Baseline
+
+Reply Publication covers human replies to published worries and publisher comments on received replies.
+
+- `publishReply` remains the domain use-case seam for reply publication behavior.
+- `publishReply` receives `authorUid`, `content`, `worry`, and Reply Publication Adapters.
+- Reply moderation happens before letter creation.
+- Moderation rejection returns `{ type: "rejected", reason }` and creates no reply letter.
+- Reply letter creation failure returns `{ type: "failed", error }` and skips notification.
+- New-reply notification failure is non-fatal after the reply letter is created.
+- `publishPublisherComment` remains the domain use-case seam for publisher comment publication behavior.
+- `publishPublisherComment` receives `replyId`, `replierId`, `content`, and Reply Publication Adapters.
+- Comment moderation happens before publisher comment update.
+- Comment moderation rejection returns `{ type: "rejected", reason }` and does not update the publisher comment.
+- Publisher comment update failure returns `{ type: "failed", error }` and skips notification.
+- New-comment notification failure is non-fatal after the publisher comment is updated.
+- New-comment notification is skipped when `replierId` starts with `bot_`.
+- Firestore payload shape, result shape, moderation behavior, notification failure handling, and bot notification skip behavior remain unchanged.
+
+## Reply Publication Production Assembly
+
+Reply Publication production assembly is the Module that wires concrete browser/Firebase/HTTP Adapters to the unchanged reply publication use-cases.
+
+- `App.tsx` crosses the Reply Publication production seam only through `publishReplyWithProductionAdapters({ authorUid, content, worry })` and `publishPublisherCommentWithProductionAdapters({ replyId, replierId, content })`.
+- `App.tsx` does not know the Reply Publication production Adapter graph.
+- `productionFactory.ts` is the composition root for Reply Publication production assembly.
+- `productionFactory.ts` may import `createReplyPublicationAdapters`, `publishReply`, and `publishPublisherComment`, but must not import `src/firebase.ts` or `../../firebase`.
+- `production.ts` is the browser app production entrypoint and is the only Reply Publication production file that imports `db` from `src/firebase.ts`.
+- The Reply Publication barrel may export pure use-case APIs, types, `createReplyPublicationAdapters`, and `createProductionReplyPublisher`.
+- The Reply Publication barrel must not export or import `production.ts`, because that would trigger Firebase initialization for pure module tests.
+- `createProductionReplyPublisher` has a narrow Interface: `db`, optional `publishReplyUseCase`, and optional `publishPublisherCommentUseCase`.
+- `createProductionReplyPublisher` does not expose concrete Adapter graph options such as moderation, letter creation, publisher comment update, notification, timestamp, or notification failure logging dependencies.
+- Production assembly returns only `publishReplyWithProductionAdapters` and `publishPublisherCommentWithProductionAdapters`.
+- Production assembly tests observe the factory Interface by injecting fake use-cases, capturing the assembled Adapters, and checking callability at a shallow smoke level.
+- Production assembly tests do not mock Firestore SDK modules, assert HTTP payloads, or render UI.
+
 # Push Registration Baseline
 
 Push Registration owns the browser/Firebase push-token lifecycle for the signed-in user.
