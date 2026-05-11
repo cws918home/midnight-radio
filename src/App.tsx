@@ -63,6 +63,8 @@ import {
 import {
   publishWorryWithProductionAdapters,
 } from './services/worryPublication/production';
+import { submitReplyFeedbackWithProductionAdapters } from './services/replyFeedback/production';
+import type { ReplyFeedback } from './services/replyFeedback/types';
 import {
   buildSentPublicationGroups,
   type SentPublicationGroup,
@@ -107,9 +109,6 @@ interface Letter {
   matchSelectionType?: 'matched' | 'random_fallback' | 'ai' | 'ai_safety_fallback';
   matchCategoriesSnapshot?: string[];
 }
-
-const isAiGeneratedReply = (letter: Pick<Letter, 'senderId' | 'isAiGenerated'>) =>
-  letter.isAiGenerated === true || letter.senderId.startsWith('bot_');
 
 // --- App Component ---
 export default function App() {
@@ -521,24 +520,15 @@ export default function App() {
     }
   };
 
-  const giveFeedback = async (replyId: string, feedbackType: 'helpful' | 'not_helpful') => {
+  const giveFeedback = async (_replyId: string, feedbackType: ReplyFeedback) => {
+    if (!selectedReply) return;
+
     try {
-      await updateDoc(doc(db, 'letters', replyId), { feedback: feedbackType });
-      setSelectedReply(prev => prev ? { ...prev, feedback: feedbackType } : null);
-
-      if (feedbackType === 'helpful' && selectedReply) {
-        if (isAiGeneratedReply(selectedReply)) {
-          return;
-        }
-
-        // Increment helpedCount for the replier
-        const replierRef = doc(db, 'users', selectedReply.senderId);
-        const replierSnap = await getDoc(replierRef);
-        if (replierSnap.exists()) {
-          const currentCount = replierSnap.data().helpedCount || 0;
-          await updateDoc(replierRef, { helpedCount: currentCount + 1 });
-        }
-      }
+      const result = await submitReplyFeedbackWithProductionAdapters({
+        reply: selectedReply,
+        feedbackType,
+      });
+      setSelectedReply(prev => prev ? { ...prev, feedback: result.feedback } : null);
     } catch (e) {
       console.error(e);
     }

@@ -97,6 +97,39 @@ Reply Publication production assembly is the Module that wires concrete browser/
 - Production assembly tests observe the factory Interface by injecting fake use-cases, capturing the assembled Adapters, and checking callability at a shallow smoke level.
 - Production assembly tests do not mock Firestore SDK modules, assert HTTP payloads, or render UI.
 
+# Reply Feedback Baseline
+
+Reply Feedback covers publisher feedback on a selected reply and the helped-count side effect for helpful human replies.
+
+- `submitReplyFeedback` is the domain use-case seam for Reply Feedback behavior.
+- `submitReplyFeedback` receives `reply`, `feedbackType`, and Reply Feedback persistence.
+- Reply Feedback persistence has only two operations: `saveReplyFeedback(replyId, feedbackType)` and `incrementHelpedCount(replierId)`.
+- Feedback persistence always happens before helped-count work.
+- Feedback persistence failure is fatal and is thrown to the caller.
+- `not_helpful` feedback saves the feedback field and skips helped-count work.
+- `helpful` feedback on AI-generated replies skips helped-count work.
+- `helpful` feedback on reply senders whose uid starts with `bot_` skips helped-count work.
+- `helpful` feedback on human replies attempts helped-count work after feedback persistence succeeds.
+- Helped-count failure is non-fatal and is intentionally hidden from the caller.
+- `SubmitReplyFeedbackResult` exposes only `{ feedback }`.
+- No helped-count outcome is exposed through the Reply Feedback Interface.
+- Firestore feedback writes keep the existing letter document shape: `updateDoc(doc(db, "letters", replyId), { feedback: feedbackType })`.
+- Firestore helped-count writes keep the existing read-modify-write behavior: read `users/{replierId}`, use `helpedCount || 0`, then write `helpedCount: currentCount + 1` when the user document exists.
+- Firestore helped-count writes do not use Firestore `increment()`.
+
+## Reply Feedback Production Assembly
+
+Reply Feedback production assembly is the Module that wires concrete Firebase persistence to the unchanged Reply Feedback use-case.
+
+- `App.tsx` crosses the Reply Feedback production seam only through `submitReplyFeedbackWithProductionAdapters({ reply, feedbackType })`.
+- `App.tsx` knows only that it submits feedback for the selected reply and updates local `selectedReply.feedback` from the returned `feedback`.
+- `App.tsx` does not know helpful-only helped-count policy, AI/bot exclusion policy, helped-count ordering, or helped-count failure behavior.
+- `production.ts` is the browser app production entrypoint and imports `db` from `src/firebase.ts`.
+- Reply Feedback production assembly does not have `productionFactory.ts` unless a concrete testability need appears.
+- The production Adapter graph remains coarse: one persistence Adapter implements feedback save and helped-count increment operations.
+- Reply Feedback tests exercise the use-case Interface with fake coarse persistence and do not render `App.tsx`.
+- Reply Feedback tests do not mock Firestore SDK modules.
+
 # Push Registration Baseline
 
 Push Registration owns the browser/Firebase push-token lifecycle for the signed-in user.
