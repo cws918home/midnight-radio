@@ -103,6 +103,8 @@ Reply Mailbox owns reply inbox/outbox subscriptions, foreground mailbox notifica
 
 - `App.tsx` crosses the Reply Mailbox seam only through `useReplyMailbox({ user })`.
 - `useReplyMailbox` exposes only `inboxReplies`, `myGivenReplies`, `unreadRepliesCount`, and `markReplyRead(replyId)`.
+- The Reply Mailbox barrel is App-facing and exports only the hook plus minimal public types.
+- Pure internals such as policy and controller are imported directly by their tests and are intentionally not exposed from the barrel, to avoid blurring the production hook boundary.
 - Received reply subscriptions query `letters` where `type == "reply"` and `receiverId == user.uid`, ordered by `createdAt desc`.
 - Given reply subscriptions query `letters` where `type == "reply"` and `senderId == user.uid`, ordered by `createdAt desc`.
 - Received reply notifications ignore the received stream's initial snapshot and notify on later `added` changes.
