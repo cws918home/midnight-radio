@@ -1,7 +1,6 @@
 import {
   useState,
   useEffect,
-  useRef,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
@@ -70,6 +69,7 @@ import {
   type SentPublicationGroup,
 } from './services/worryPublication/readModel';
 import { usePushRegistration } from './services/pushRegistration';
+import { useReplyMailbox } from './services/replyMailbox';
 
 // --- Constants ---
 const CATEGORIES = WORRY_CATEGORIES;
@@ -119,8 +119,6 @@ export default function App() {
   const [view, setView] = useState<'login' | 'onboarding' | 'home' | 'write_worry' | 'write_reply' | 'inbox' | 'my_replies' | 'read_reply' | 'read_my_reply' | 'settings'>('login');
   
   const [feedWorries, setFeedWorries] = useState<Letter[]>([]);
-  const [inboxReplies, setInboxReplies] = useState<Letter[]>([]);
-  const [myGivenReplies, setMyGivenReplies] = useState<Letter[]>([]);
   const [myWorries, setMyWorries] = useState<Letter[]>([]);
   
   const [selectedWorry, setSelectedWorry] = useState<Letter | null>(null);
@@ -161,6 +159,12 @@ export default function App() {
     requestNotificationPermission,
     resetPushRegistrationOnSignOut,
   } = usePushRegistration({ user, loading });
+  const {
+    inboxReplies,
+    myGivenReplies,
+    unreadRepliesCount,
+    markReplyRead,
+  } = useReplyMailbox<Letter>({ user });
 
   // Auth & Profile Listener
   useEffect(() => {
@@ -307,88 +311,6 @@ export default function App() {
 
     return () => unsubscribe();
   }, [profile]);
-
-  // Inbox (Replies) Listener
-  const initialLoadRef = useRef(true);
-  useEffect(() => {
-    if (!user) return;
-
-    const q = query(
-      collection(db, 'letters'),
-      where('type', '==', 'reply'),
-      where('receiverId', '==', user.uid),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      if (!initialLoadRef.current) {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const title = `📻 갈피`;
-            const options = {
-              body: "누군가 내 고민에 답변을 보냈어요. 지금 확인해보세요.",
-              icon: '/pwa-192x192.png',
-              badge: '/pwa-192x192.png',
-            };
-
-            if ('serviceWorker' in navigator && Notification.permission === 'granted') {
-              navigator.serviceWorker.ready.then(registration => {
-                registration.showNotification(title, options);
-              });
-            } else if (Notification.permission === 'granted') {
-              new Notification(title, options);
-            }
-          }
-        });
-      }
-
-      setInboxReplies(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter)));
-      
-      if (initialLoadRef.current) initialLoadRef.current = false;
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  // Outbox (My Given Replies) Listener + Comment Notification
-  useEffect(() => {
-    if (!user) return;
-
-    const q = query(
-      collection(db, 'letters'),
-      where('type', '==', 'reply'),
-      where('senderId', '==', user.uid),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      if (!initialLoadRef.current) {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'modified') {
-            const data = change.doc.data() as Letter;
-            if (data.publisherComment && Notification.permission === 'granted') {
-              const title = `💌 따뜻한 코멘트 도착`;
-              const options = {
-                body: `상대방이 감사 인사를 남겼어요: "${data.publisherComment}"`,
-                icon: '/pwa-192x192.png',
-              };
-
-              if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.ready.then(registration => {
-                  registration.showNotification(title, options);
-                });
-              } else {
-                new Notification(title, options);
-              }
-            }
-          }
-        });
-      }
-      setMyGivenReplies(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter)));
-    });
-
-    return () => unsubscribe();
-  }, [user]);
 
   // My Sent Worries Listener
   useEffect(() => {
@@ -546,7 +468,6 @@ export default function App() {
     }
   };
 
-  const unreadRepliesCount = inboxReplies.filter(r => !r.isRead).length;
   const groupedMyWorries: SentPublicationGroup[] = buildSentPublicationGroups(myWorries);
   const profileInterests = profile?.interests ?? [];
   const visibleHomeInterestBadgeText = profileInterests.slice(0, 5).join(', ');
@@ -939,7 +860,7 @@ export default function App() {
                             <button 
                               key={reply.id}
                               onClick={() => { 
-                                updateDoc(doc(db, 'letters', reply.id), { isRead: true });
+                                void markReplyRead(reply.id);
                                 setSelectedReply(reply); 
                                 setView('read_reply'); 
                               }}

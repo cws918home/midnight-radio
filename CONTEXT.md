@@ -97,6 +97,24 @@ Reply Publication production assembly is the Module that wires concrete browser/
 - Production assembly tests observe the factory Interface by injecting fake use-cases, capturing the assembled Adapters, and checking callability at a shallow smoke level.
 - Production assembly tests do not mock Firestore SDK modules, assert HTTP payloads, or render UI.
 
+# Reply Mailbox Baseline
+
+Reply Mailbox owns reply inbox/outbox subscriptions, foreground mailbox notifications, unread counting, and read marking.
+
+- `App.tsx` crosses the Reply Mailbox seam only through `useReplyMailbox({ user })`.
+- `useReplyMailbox` exposes only `inboxReplies`, `myGivenReplies`, `unreadRepliesCount`, and `markReplyRead(replyId)`.
+- Received reply subscriptions query `letters` where `type == "reply"` and `receiverId == user.uid`, ordered by `createdAt desc`.
+- Given reply subscriptions query `letters` where `type == "reply"` and `senderId == user.uid`, ordered by `createdAt desc`.
+- Received reply notifications ignore the received stream's initial snapshot and notify on later `added` changes.
+- Given reply notifications ignore the given stream's initial snapshot and notify on later `modified` changes with a truthy `publisherComment`.
+- Received and given initial-load state are intentionally independent.
+- Mailbox notifications require browser notification permission `granted`.
+- Browser notification delivery uses service worker `showNotification` when available and falls back to `new Notification`.
+- Read marking keeps the existing Firestore write: `updateDoc(doc(db, "letters", replyId), { isRead: true })`.
+- `App.tsx` intentionally calls `void markReplyRead(reply.id)` and immediately continues navigation to `read_reply`.
+- The Reply Mailbox production Adapter remains coarse: Firestore subscriptions, read marking, permission lookup, and browser notification delivery live behind one Adapter.
+- Reply Mailbox tests cover pure notification policy and the React-free controller; hook tests are intentionally not added.
+
 # Reply Feedback Baseline
 
 Reply Feedback covers publisher feedback on a selected reply and the helped-count side effect for helpful human replies.
