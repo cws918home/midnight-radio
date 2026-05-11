@@ -61,6 +61,18 @@ Sent Worry publication history is grouped by a pure read-model before rendering.
 - Missing, null, or no-`toMillis` timestamps are treated as singleton groups.
 - Existing Firestore query behavior and sent-history rendering behavior remain unchanged.
 
+## Home Worry Feed
+
+Home Worry Feed owns home-screen worry feed reads.
+
+- The Firestore query shape remains `collection(db, "letters")`, `where("type", "==", "worry")`, and `limit(200)`, with no `orderBy`.
+- Snapshot mapping keeps the existing object spread order: `{ id: doc.id, ...doc.data() }`.
+- Visibility keeps public worries and worries addressed to the current profile uid only.
+- Visible worries are sorted client-side by descending `createdAt?.toMillis ? createdAt.toMillis() : 0`.
+- `useHomeWorryFeed({ profile })` does not subscribe when `profile` is `null`.
+- The hook clears its local `feedWorries` when `profile` becomes `null`; this is harmless local cleanup and not a change to the preserved feed policy.
+- Home Worry Feed remains separate from Sent Worry Read-Model and Presence/ActiveUsers.
+
 # Reply Publication Baseline
 
 Reply Publication covers human replies to published worries and publisher comments on received replies.

@@ -21,7 +21,6 @@ import {
   updateDoc,
   deleteDoc,
   orderBy,
-  limit,
   Timestamp,
   setDoc,
   getDoc,
@@ -70,6 +69,10 @@ import {
 } from './services/worryPublication/readModel';
 import { usePushRegistration } from './services/pushRegistration';
 import { useReplyMailbox } from './services/replyMailbox';
+import {
+  useHomeWorryFeed,
+  type HomeWorryFeedLetter,
+} from './services/homeWorryFeed';
 
 // --- Constants ---
 const CATEGORIES = WORRY_CATEGORIES;
@@ -118,10 +121,9 @@ export default function App() {
   
   const [view, setView] = useState<'login' | 'onboarding' | 'home' | 'write_worry' | 'write_reply' | 'inbox' | 'my_replies' | 'read_reply' | 'read_my_reply' | 'settings'>('login');
   
-  const [feedWorries, setFeedWorries] = useState<Letter[]>([]);
   const [myWorries, setMyWorries] = useState<Letter[]>([]);
   
-  const [selectedWorry, setSelectedWorry] = useState<Letter | null>(null);
+  const [selectedWorry, setSelectedWorry] = useState<HomeWorryFeedLetter | null>(null);
   const [selectedReply, setSelectedReply] = useState<Letter | null>(null);
   
   const [isProcessing, setIsProcessing] = useState(false);
@@ -165,6 +167,7 @@ export default function App() {
     unreadRepliesCount,
     markReplyRead,
   } = useReplyMailbox<Letter>({ user });
+  const { feedWorries } = useHomeWorryFeed({ profile });
 
   // Auth & Profile Listener
   useEffect(() => {
@@ -263,53 +266,6 @@ export default function App() {
     };
     const interval = setInterval(updatePresence, 60000);
     return () => clearInterval(interval);
-  }, [profile]);
-
-  // Feed (Worries direct to me or public)
-  useEffect(() => {
-    if (!profile) return;
-
-    // Super simple query to avoid ANY index requirements
-    const q = query(
-      collection(db, 'letters'),
-      where('type', '==', 'worry'),
-      limit(200)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      try {
-        console.log(`Received snapshot with ${snapshot.size} worries.`);
-        const allWorries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Letter));
-        
-        // Final Filter Logic (Applied on the client side):
-        // 1. Show if receiverId is 'public' (Admin/Global) -> ALWAYS SHOW
-        // 2. Show if receiverId is MY UID, regardless of category overlap
-        let filtered = allWorries.filter(w => {
-          if (w.receiverId === 'public') return true;
-          
-          if (w.receiverId === profile.uid) {
-            return true;
-          }
-          return false;
-        });
-
-        // Sort on client side by createdAt (newest first)
-        filtered.sort((a, b) => {
-          const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
-          const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
-          return timeB - timeA;
-        });
-
-        console.log(`Feed updated: ${filtered.length} worries visible.`);
-        setFeedWorries(filtered);
-      } catch (err) {
-        console.error("Error processing worries:", err);
-      }
-    }, (err) => {
-      console.error("Feed Listener CRITICAL Error:", err);
-    });
-
-    return () => unsubscribe();
   }, [profile]);
 
   // My Sent Worries Listener
@@ -411,7 +367,7 @@ export default function App() {
 
 
   // 2. Send Reply -> Filter Check First
-  const sendReply = async (content: string, worry: Letter) => {
+  const sendReply = async (content: string, worry: HomeWorryFeedLetter) => {
     if (!user) return;
     setIsProcessing(true);
     try {
