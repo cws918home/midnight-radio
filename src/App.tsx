@@ -62,20 +62,8 @@ import {
   publishReply,
 } from './services/replyPublication';
 import {
-  createPublicationFollowUpRunner,
-  publishWorry as publishWorryUseCase,
-} from './services/worryPublication';
-import { createFisherYatesShuffle } from './services/worryPublication/adapters/random';
-import {
-  moderateWorryViaHttp,
-  notifyNewWorryViaHttp,
-  scheduleBotReplyViaHttp,
-} from './services/worryPublication/adapters/http';
-import {
-  createFirestorePublicationGroupId,
-  createWorryLettersInFirestore,
-  fetchActiveHumansFromFirestore,
-} from './services/worryPublication/adapters/firestore';
+  publishWorryWithProductionAdapters,
+} from './services/worryPublication/production';
 import {
   buildSentPublicationGroups,
   type SentPublicationGroup,
@@ -472,26 +460,9 @@ export default function App() {
 
     setIsProcessing(true);
     try {
-      const result = await publishWorryUseCase({
+      const result = await publishWorryWithProductionAdapters({
         authorUid: user.uid,
         content,
-        adapters: {
-          moderateWorry: moderateWorryViaHttp,
-          fetchActiveHumans: ({ activeSince, limit }) =>
-            fetchActiveHumansFromFirestore({
-              db,
-              activeSince,
-              limitCount: limit,
-            }),
-          createPublicationGroupId: () => createFirestorePublicationGroupId(db),
-          createWorryLetters: params => createWorryLettersInFirestore({ db, ...params }),
-          runPublicationFollowUps: createPublicationFollowUpRunner({
-            scheduleBotReply: scheduleBotReplyViaHttp,
-            notifyNewWorry: notifyNewWorryViaHttp,
-          }),
-          now: () => new Date(),
-          shuffle: createFisherYatesShuffle(Math.random),
-        },
       });
 
       if (result.status === 'rejected') {

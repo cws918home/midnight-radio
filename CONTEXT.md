@@ -24,6 +24,23 @@ This document captures the current client-side worry publication behavior before
 - New-worry notification still targets all selected recipient ids.
 - Bot reply scheduling and new-worry notification failures are non-fatal and are returned as publication warnings.
 
+## Worry Publication Production Assembly
+
+Worry Publication production assembly is the Module that wires concrete browser/Firebase/HTTP Adapters to the unchanged `publishWorry` use-case.
+
+- `publishWorry` remains the domain use-case seam for Worry Publication behavior.
+- `App.tsx` crosses the Worry Publication production seam only through `publishWorryWithProductionAdapters({ authorUid, content })`.
+- `App.tsx` does not know the Worry Publication production Adapter graph.
+- `productionFactory.ts` is the composition root for Worry Publication production assembly.
+- `productionFactory.ts` may import concrete Worry Publication Adapters, but must not import `src/firebase.ts`.
+- `production.ts` is the browser app production entrypoint and is the only Worry Publication production file that imports `db` from `src/firebase.ts`.
+- The Worry Publication barrel may export pure use-case APIs, types, `createPublicationFollowUpRunner`, and `createProductionWorryPublisher`.
+- The Worry Publication barrel must not export or import `production.ts`, because that would trigger Firebase initialization for pure module tests.
+- `createProductionWorryPublisher` has a narrow Interface: `db`, optional `now`, optional `random`, and optional `publish`.
+- `createProductionWorryPublisher` does not expose concrete Adapter graph options such as moderation, active-human fetching, letter creation, bot scheduling, notification, or follow-up runner dependencies.
+- Production assembly tests observe the factory Interface by injecting `publish`, capturing the assembled Adapters, and checking callability plus `now` and `random` behavior.
+- Production assembly tests do not mock Firestore SDK modules and do not assert HTTP payloads.
+
 ## Moderation Normalization
 
 - Provider moderation output is untrusted until normalized.
