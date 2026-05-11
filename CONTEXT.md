@@ -43,3 +43,26 @@ Sent Worry publication history is grouped by a pure read-model before rendering.
 - Empty `categories: []` wins over legacy `category` and later renders through the existing fallback behavior.
 - Missing, null, or no-`toMillis` timestamps are treated as singleton groups.
 - Existing Firestore query behavior and sent-history rendering behavior remain unchanged.
+
+# Push Registration Baseline
+
+Push Registration owns the browser/Firebase push-token lifecycle for the signed-in user.
+
+- `App.tsx` crosses the Push Registration seam only through `usePushRegistration`.
+- `usePushRegistration` exposes only notification permission, registration status, debug token, permission request, and sign-out reset behavior to the app shell.
+- Foreground `onMessage` notification display remains in `App.tsx`.
+- Settings UI strings and permission labels remain unchanged.
+- Local Push Registration metadata is stored under `galpi:push-registration-metadata`.
+- Legacy localStorage keys remain readable: `galpi:push-instance-id`, `galpi:push-last-known-fcm-token`, and `galpi:push-last-known-fcm-uid`.
+- A browser instance id is preserved when local Push Registration metadata is cleared.
+- Complete local metadata means permission is granted, uid matches, instance id matches, token matches, the success marker matches, and local status is not failed.
+- Only complete local metadata can produce a registered no-op without Firestore token document confirmation.
+- Missing local token, `failed` status, and `missing_token_doc` status attempt registration.
+- Missing or stale success markers attempt Firestore token document confirmation before registration.
+- Firestore confirmation is suppressed while a registration is in flight, when the token was already confirmed in-session, or during the existing 90-second confirmation cooldown.
+- The Firestore token document path remains `users/{uid}/fcmTokens/{encodeURIComponent(token)}`.
+- The Firestore token document shape remains compatible: `token`, `platform: "web"`, `userAgent`, `createdAt`, `updatedAt`, `notificationPermission`, `isInstalledPWA`, and `instanceId`.
+- User documents still receive `lastTokenRefresh` after token document write; failure to update it remains non-fatal.
+- App-controlled service worker registration is preferred over the fallback Firebase messaging service worker when available.
+- Previous token document cleanup after signed-in user change or token change happens only after the new registration succeeds.
+- Sign-out and permission revocation still perform immediate stored-token cleanup.
